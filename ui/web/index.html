@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self' data: blob:; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'self'"
+    />
+    <title>QQBot Studio</title>
+    <link rel="stylesheet" href="studio.css" />
+    <script defer src="studio.js"></script>
+  </head>
+  <body>
+    <div class="ambient ambient-one" aria-hidden="true"></div>
+    <div class="ambient ambient-two" aria-hidden="true"></div>
+    <div class="ambient ambient-three" aria-hidden="true"></div>
+    <div class="shell">
+      <aside class="sidebar glass">
+        <div class="brand pywebview-drag-region">
+          <div class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32">
+              <path d="M8 11h16v10H8zM12 7v4m8-4v4M12 15v3m8-3v3M12 25h8" />
+            </svg>
+          </div>
+          <div>
+            <strong>QQBot<span>Studio</span></strong
+            ><small>你的陪伴，持续在线</small>
+          </div>
+        </div>
+        <div class="workspace-label">工作空间 <span>LOCAL</span></div>
+        <nav id="navigation" aria-label="主导航"></nav>
+        <div class="sidebar-bottom">
+          <button class="nav-item" data-page="appearance">
+            <span data-icon="palette"></span><span>外观与个性化</span>
+          </button>
+          <button class="nav-item" data-page="settings">
+            <span data-icon="settings"></span><span>设置</span>
+          </button>
+          <div class="workspace-card">
+            <span class="status-dot"></span>
+            <div>
+              <strong id="side-status">正在连接</strong
+              ><small id="workspace-name">本地工作区</small>
+            </div>
+            <button
+              class="icon-button"
+              data-action="reload"
+              title="重新载入配置"
+              aria-label="重新载入配置"
+            >
+              <span data-icon="refresh"></span>
+            </button>
+          </div>
+          <div class="sidebar-foot">
+            <span>STUDIO 4.0</span><span>pywebview</span>
+          </div>
+        </div>
+      </aside>
+      <div class="main-shell">
+        <header class="titlebar pywebview-drag-region">
+          <div class="breadcrumb">
+            <span data-icon="grid"></span><span>工作空间</span
+            ><span class="slash">/</span><strong id="breadcrumb">概览</strong>
+          </div>
+          <div class="window-controls">
+            <button data-window="minimize" aria-label="最小化" title="最小化">
+              <svg viewBox="0 0 16 16"><path d="M3 8h10" /></svg></button
+            ><button
+              data-window="maximize"
+              aria-label="最大化或还原"
+              title="最大化或还原"
+            >
+              <svg viewBox="0 0 16 16">
+                <rect x="4" y="4" width="8" height="8" rx="1" />
+              </svg></button
+            ><button
+              class="window-close"
+              data-window="close"
+              aria-label="关闭"
+              title="关闭"
+            >
+              <svg viewBox="0 0 16 16"><path d="m4 4 8 8M12 4l-8 8" /></svg>
+            </button>
+          </div>
+        </header>
+        <div class="toolbar">
+          <div class="connection-pill">
+            <span class="status-dot"></span
+            ><span id="top-status">连接界面中</span>
+          </div>
+          <div class="toolbar-actions">
+            <span id="dirty-indicator" hidden>有未保存的更改</span
+            ><button class="button small ghost" data-page="logs">
+              <span data-icon="terminal"></span>运行日志</button
+            ><button
+              class="button small"
+              id="save-global"
+              data-action="save-config"
+            >
+              <span data-icon="check"></span>保存更改</button
+            ><button
+              class="button small primary"
+              id="start-button"
+              data-action="start"
+            >
+              <span data-icon="play"></span>启动 Bot
+            </button>
+          </div>
+        </div>
+        <main id="main-content" tabindex="-1">
+          <div class="loading">
+            <div class="loader"></div>
+            <h2>正在打开工作空间</h2>
+            <p>载入配置、角色与界面偏好</p>
+          </div>
+        </main>
+        <footer class="statusbar">
+          <span id="footer-state">本地连接</span
+          ><span
+            ><kbd>Ctrl</kbd> <kbd>S</kbd> 保存 <i></i
+            ><span id="footer-engine">WebView2</span></span
+          >
+        </footer>
+      </div>
+    </div>
+    <div id="toast-region" aria-live="polite"></div>
+    <dialog id="dialog">
+      <form method="dialog">
+        <div id="dialog-body"></div>
+        <div class="dialog-actions">
+          <button class="button" value="cancel">取消</button
+          ><button class="button primary" id="dialog-confirm" value="confirm">
+            确定
+          </button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>

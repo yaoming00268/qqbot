@@ -1,0 +1,182 @@
+# ========================================================
+# QQ 官方开放平台机器人 + Antigravity Gemini 账号配额配置
+# ========================================================
+
+# QQ 开放平台开发者凭据 (前往 https://q.qq.com/#/apps/bot 获取)
+qq:
+  appid: ""          # 请填入您在 QQ 开放平台申请的机器人 AppID
+  secret: ""         # 请填入对应的 AppSecret
+  is_sandbox: false  # 是否为沙箱测试模式（开发测试阶段可设为 true）
+
+# 情感分析：main 沿用主会话；lmstudio 使用本地语言模型；local_classifier 读取训练分类器。
+# LM Studio SDK 只提供推理/嵌入；本程序使用人工逐句标签训练分类器，不修改大模型权重。
+emotion:
+  provider: main
+  bert_service_file: "emotion_studio/runtime/inference.json"  # provider: bert；工作台加载模型后创建
+  lms_host: "127.0.0.1:1234"  # LM Studio 本地服务的 host:port，无 /v1
+  llm_model: ""              # GUI 读取已下载模型后选择模型 key
+  embedding_model: ""        # lmstudio_embedding 训练特征需要选择嵌入模型
+  classifier_path: "data/emotion/model.npz"
+  dataset_path: "data/emotion/dataset.jsonl"
+  labels: [中性, 喜悦, 悲伤, 愤怒, 恐惧, 惊讶, 厌恶]
+  training_features: char_hash  # char_hash / lmstudio_embedding（冻结嵌入，训练分类头）
+  feature_dim: 2048            # 仅字符特征；嵌入维度由模型返回
+  epochs: 40
+  batch_size: 16
+  learning_rate: 0.2
+  l2: 0.0001
+  validation_fraction: 0.2    # 0 不划分验证集；其余按标签分层抽样
+  seed: 42
+
+# 跨平台角色：具体网站后续配置；空配置兼容现有 QQ 人设隔离。
+# 网站账号、发布/评论定位器及登录步骤见 reports/AGENT_RUNTIME_GUIDE_20261109.md。
+agent:
+  enabled: true
+  database_path: ""           # 留空：放在 bot.runtime_database_path 同目录
+  actors: {}                  # 例如 alice: {name: 小艾, prompt: "..."}
+  bindings: {}                # 例如 "onebot:default::人设ID": alice；不配置则不跨账号合并
+  accounts: {}                # 通用网站账号 -> actor_id/home_url/actions/feeds/发布规则
+  max_concurrent_activities: 2
+  action_timeout_ms: 10000
+  max_content_chars: 16000
+  autonomous_model_enabled: true
+  reflection_timeout_seconds: 180
+
+# Antigravity 本地 Gemini 配额中继配置
+antigravity:
+  default_model: "flash"       # 默认模型: flash (Gemini 3.8 Flash), pro (Gemini 3.8 Pro), flash_lite (极速)
+  ls_address: ""               # Antigravity Language Server 地址，留空自动检测 (例如 localhost:7873)
+  csrf_token: ""               # Antigravity CSRF Token，留空自动检测
+  language_server_path: ""     # language_server.exe 路径，留空自动定位
+  timeout_seconds: 0           # agent 工作不限时；旧版非零值也不会终止机器人主聊天或任务
+  session_timeout_minutes: 30  # 仅辅助临时会话空闲清理，0=不清理；群聊/私聊主会话始终保留
+
+# 机器人交互行为
+bot:
+  bot_name: ""               # /botname /机器人名称（主人）
+  reply_char_limit: 0          # /length /字数：普通聊天总字数；0 不限，命令全文与文件不截断
+  admin_ids: []                # 管理员稳定 QQ/OpenID；官方通道使用此表，群管理员可在 group_settings 单独指定
+  chat_buffer_seconds: 5      # 固定窗口缓存群成员新消息；统一回复完成后重新计时；0 使用旧的合并方式
+  backlog_interrupt_messages: 3  # 同会话积压3条新消息时中断旧回复并合并交给AI；0关闭，已发送内容和后台任务保留
+  qq_window_capture: true  # QQBot 优先截图；不可用时后台获取原图并由独立分支识别
+  mode: "official"            # official / onebot / dual / agent（独立角色，无需QQ）
+  system_prompt: "你有自己的性格、兴趣和判断，与熟悉的人自然交流，认真回应值得在意的事。"
+  max_reply_length: 1200       # 单条消息分段阈值，不限制整轮回答的总字数
+  strip_mentions: true         # 自动过滤消息中的 @机器人 文本
+  enable_action_descriptions: true # 动作神态开关：false=纯台词对话（严禁括号动作，省Token防分段）；true=标准角色动作神态
+  autonomous_enabled: false    # 群聊新消息自动唤醒分析，无需先 @
+  never_sleep: true            # 空闲时持续待命；有新消息始终自动唤醒
+  idle_sleep_minutes: 30       # never_sleep=false 时，连续空闲超过此时间暂停主动话题
+  proactive_chat_enabled: false # 有真实见闻或具体愿望时主动聊天，不强制找话题
+  proactive_interval_minutes: 10 # 空闲话题间隔（分钟），新消息或发言后重新计时
+  self_activity_enabled: false # 独立思考、授权本机资料和网络探索，和主动聊天分别控制；需 autonomous_enabled
+  self_activity_interval_minutes: 20 # 空闲自主复盘与阅读的最小间隔；每个主会话最多一个探索任务
+  self_activity_roots: []       # 可选额外只读资料目录；默认包括探索工作区、资料库和本会话主人已授权的目录
+  idle_recall_minutes: 30       # 空闲时归档为事件、人物和成长候选；保留原会话ID与身份
+  mention_probability: 0.5     # 自主回复时 @ 发言人的概率 (0.0 - 1.0，否则不@直接回复)
+  context_message_count: 10    # 群聊回复时附带的近期上下文消息条数
+  master_id: ""                # 官方 OpenID / OneBot QQ号，多个用逗号隔开；全局切换人设仅限这些账号
+  memory_enabled: true         # 群聊记忆库：true=自动在 data/memories/ 下记录并压缩群成员画像与话题
+  memory_max_entries: 15       # 记忆库触发压缩的问答条目数阈值
+
+# OneBot v11 / NapCat 账号；无需官方 AppID，开启 bot.mode: onebot 后使用
+onebot:
+  enabled: false
+  active_account: "account_1"
+  reconnect_interval: 5
+  accounts:
+    account_1:
+      name: "小号 A"
+      account_id: ""
+      ws_url: "ws://127.0.0.1:3001"
+      access_token: ""
+      enabled: true
+    account_2:
+      name: "小号 B"
+      account_id: ""
+      ws_url: "ws://127.0.0.1:3002"
+      access_token: ""
+      enabled: true
+
+# 媒体检索、下载和发送；旧配置未包含此节时会自动使用以下默认值
+media:
+  delivery_batch_size: 20      # /files /文件：超出直发数量自动 ZIP，保留全部成果
+  delivery_max_file_mb: 1024   # /file-size /文件大小：单个交付文件上限，1–1024 MB
+  enabled: true
+  image_enabled: true
+  image_generation_enabled: true
+  image_generation_provider: "gemini_web"  # gemini_web: 网页端（支持原图编辑）；native: 原生工具；api: 图片 API
+  image_generation_api_url: ""         # API 模式填写完整地址，可使用本机图片服务
+  image_generation_api_key_env: "QQBOT_IMAGE_GENERATION_KEY"
+  image_generation_model: ""           # API 模式填写服务支持的模型
+  gemini_web:
+    model: "pro"                      # pro / flash / flash-lite / auto；也可填写账号支持的模型全名
+    auto_browser: true                 # 自动复用已连接或可直接读取的浏览器登录态
+    browser: "auto"                    # auto / chrome / edge / brave / firefox
+    browser_profile: ""                # 留空使用最近使用的配置；也可指定配置目录
+    auto_proxy: true                   # 代理环境变量未设置时自动使用系统代理
+    cookie_file: "data/gemini_web/cookies.json"
+    secure_1psid_env: "QQBOT_GEMINI_1PSID"      # 环境变量的值为 __Secure-1PSID
+    secure_1psidts_env: "QQBOT_GEMINI_1PSIDTS"  # 环境变量的值为 __Secure-1PSIDTS（可选）
+    proxy_env: "HTTPS_PROXY"           # 代理地址环境变量名；留空直连
+    timeout_seconds: 600
+  video_enabled: true
+  video_generation_enabled: true
+  video_generation_provider: "gemini_web"  # 默认使用网页版 Gemini；native 使用独立反重力生成分支
+  file_enabled: true
+  default_image_count: 3
+  max_image_count: 5
+  max_image_mb: 10
+  max_video_mb: 50
+  max_file_mb: 100
+  default_video_max_seconds: 120
+  download_timeout_seconds: 60
+  upload_timeout_seconds: 120
+  task_timeout_seconds: 0  # 仅公共下载器；反重力任务始终不设总时限
+  max_concurrent_downloads: 2
+  per_conversation_queue_limit: 3
+  max_pending_jobs: 32
+  cache_ttl_hours: 24
+  cache_max_mb: 2048
+  result_ttl_minutes: 15
+  require_explicit_group_request: true
+  local_library_roots: ["data/library"]
+  search_provider: "native"    # native: 反重力自主检索/浏览/抓取并下载到任务文件夹，QQBot 交付；auto/wikimedia 使用公共下载器
+  search_api_url: ""           # 可选，GET ?q=关键词&kind=image|video|file&limit=5&offset=0
+  search_api_key_env: "QQBOT_MEDIA_SEARCH_KEY"
+  commons_api_url: "https://commons.wikimedia.org/w/api.php"
+  napcat_stream_enabled: true  # 远程 NapCat 使用 upload_file_stream；同机优先本地路径
+  publish_upload_url: ""       # 可选，已有 HTTPS 存储接口，POST 原始文件，返回 {"url":"https://..."}
+  publish_token_env: "QQBOT_MEDIA_PUBLISH_TOKEN"
+  official_file_enabled: false # 官方通用文件未普遍开放，默认返回链接；仅确认账号支持后开启
+  ffmpeg_path: "ffmpeg"
+  ffprobe_path: "ffprobe"
+  cache_dir: "data/cache/media"
+  database_path: "data/media.sqlite3"
+
+# 表情包先在控制台“表情包与自主学习”页导入并填写标签
+stickers:
+  enabled: true
+  directory: "data/stickers"
+  cooldown_seconds: 60         # 同账号、同群发送间隔；每轮最多一张
+  expire_seconds: 120          # 超过此时间的排队表情不再补发
+
+# 主人在 QQ 提供 exe 路径后启动后台软件/游戏任务
+sandbox:
+  enabled: true
+  mode: "background"        # 独立后台桌面窗口，不切换用户桌面；可选 qemu（需配置虚拟机）
+  startup_timeout_seconds: 60  # 等待实际内容窗口和有效截图；不重启、不重放输入，后续任务不限时
+  directory: "data/sandbox"   # 软件/游戏、动作、截图、学习记录和任务工作目录
+  max_actions: 0               # 软件/游戏操作次数上限；0 表示不限次数，后台工作也不设总时限
+  galgame_reading:
+    enabled: true             # 普通对白本地读取；遇选项/场景变化/低置信度时返回画面
+    batch_lines: 8            # 每批最多逐句推进，始终逐次取图核对，不长按快进
+    dialogue_top: 0.62         # OCR 对白框上边界，相对客户区高度；特殊布局可调整
+    settle_ms: 600            # 等待文字稳定后才推进，毫秒
+    visual_interval: 24       # 最多累计多少次普通对白推进后补充完整画面
+    scene_threshold: 0.16     # 对白框上方明显画面变化阈值
+  autonomous_enabled: false   # 自主调度总开关；还需主人为单个软件/游戏开启 autoplay
+  interval_minutes: 30         # 已结束任务的自主续用间隔，不是运行时限；需开启自主调度和目标 autoplay
+  profiles: {}                # 只读资料目录别名，例如 {"游戏资料": "E:/资料/游戏"}；不填写密码
+  browser_profiles: {}        # 专用 Chromium 登录目录，例如 {"视频账号": "E:/bot-browser/video"}；不填写密码
+  browser_executable: ""      # 主人只给网址时使用；留空自动查找 Chrome/Edge，也可配置浏览器完整 exe 路径
