@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import socket
 import sys
 import tempfile
 import time
@@ -16,7 +17,7 @@ sys.path.insert(0, str(ROOT))
 from maintenance.package_runtime import digest, verify_package
 
 
-def verify(archive: Path, report: Path, *, reply_flow=False) -> dict:
+def verify(archive: Path, report: Path, *, reply_flow=False, broadcast_flow=False) -> dict:
     archive, report = archive.resolve(), report.resolve()
     report.mkdir(parents=True, exist_ok=True)
     manifest = verify_package(archive)
@@ -24,7 +25,7 @@ def verify(archive: Path, report: Path, *, reply_flow=False) -> dict:
     # A configured developer machine must not supply a data home, Python import
     # path or model credentials to the unpacked launchers.
     for key in list(environment):
-        if key.startswith(("QQBOT_", "ANTIGRAVITY_")) or key.endswith(("_API_KEY", "_ACCESS_TOKEN")):
+        if key.startswith(("QQBOT_", "ANTIGRAVITY_", "BILIBILI_")) or key.endswith(("_API_KEY", "_ACCESS_TOKEN")):
             environment.pop(key, None)
     environment.pop("PYTHONPATH", None)
     environment.update(QT_QPA_PLATFORM="offscreen", PYTHONIOENCODING="utf-8")
@@ -32,6 +33,7 @@ def verify(archive: Path, report: Path, *, reply_flow=False) -> dict:
                                            for part in ("System32", ""))
     checks = []
     reply_result = None
+    broadcast_result = None
 
     def invoke(label, argv, *, cwd, stdin=None, env=None, protocol=False, timeout=90):
         started = time.perf_counter()
@@ -80,6 +82,7 @@ def verify(archive: Path, report: Path, *, reply_flow=False) -> dict:
         core = str(runtime / "QQBot.exe")
         for label, parts in (("core_import", ["--check"]),
                              ("actor_import", ["--module", "actor", "--check"]),
+                             ("voice_import", ["--module", "voice", "--check"]),
                              ("gui_offscreen", ["--module", "gui", "--check-gui"]),
                              ("dependencies_ocr_crypto_playwright", ["--check-dependencies"])):
             value = invoke(label, [core, "--home", str(home), *parts], cwd=base)
@@ -106,6 +109,11 @@ def verify(archive: Path, report: Path, *, reply_flow=False) -> dict:
 
         status = batch("actor_launcher_first_run", "actor.bat", "status")
         assert status["ok"]
+        voice = batch("voice_launcher_first_run", "voice.bat", "status")
+        assert voice["ok"] and voice["voice"]["enabled"] is False
+        kana = invoke("voice_kana_without_external_python", [core, "--home", str(home), "--module", "voice",
+                      "prepare", "--text", "一緒に本を読む。"], cwd=base)
+        assert kana["ok"] and "".join(row["text"] for row in kana["chunks"]) == "いっしょにほんをよむ。"
         default_config = runtime / "data/config.yaml"
         assert default_config.exists()
         import yaml
@@ -189,6 +197,39 @@ def verify(archive: Path, report: Path, *, reply_flow=False) -> dict:
                             "commit_finish_single_call": True, "mcp_supported": True,
                             "idempotent": True, "cached_speech_consumed": True}
 
+        if broadcast_flow:
+            from config import AppConfig
+            from console_tools.broker import ConsoleBroker
+            config_path = home / "config.yaml"
+            config = AppConfig.load(str(config_path))
+            def free_port():
+                with socket.socket() as listener:
+                    listener.bind(("127.0.0.1", 0))
+                    return listener.getsockname()[1]
+            config.bilibili.enabled = True
+            config.bilibili.port = free_port()
+            config.vtuber.enabled = True
+            config.vtuber.port = free_port()
+            config.save(str(config_path))
+            broker = ConsoleBroker(home / "broadcast-console.sqlite3")
+            context_file = broker.issue_context({"namespace": "broadcast-fixture", "scope": "fixture", "session_key": "fixture",
+                "main_agent": True, "is_master": True, "broadcast_config_path": str(config_path)}, home / "broadcast-contexts")
+            def broadcast_call(label, operation, *parts):
+                return invoke(label, [str(runtime / "QQBotCLI.exe"), "--home", str(home), "broadcast", operation,
+                                     *parts, "--context-file", context_file], cwd=base)
+            state = broadcast_call("frozen_broadcast_sdk_status", "status")
+            assert state["sdk_ready"] and state["sdk_version"] == "17.4.2"
+            assert not state["credentials_present"] and not state["allow_publish"]
+            draft = broadcast_call("frozen_broadcast_save_draft", "draft", "--broadcast-kind", "dynamic", "--text", "便携版完整草稿 <script>不是指令</script>")
+            shown = broadcast_call("frozen_broadcast_read_draft", "draft_show", "--draft-id", draft["id"])
+            assert shown["body"]["text"] == draft["body"]["text"] and shown["revision"] == 1
+            cue = broadcast_call("frozen_live2d_local_cue", "avatar", "--cue", "emotion", "--avatar-emotion", "happy")
+            assert cue["event_id"] and cue.get("clients", 0) == 0
+            contract = invoke("frozen_broadcast_cli_help", [str(runtime / "QQBotCLI.exe"), "--home", str(home), "help", "broadcast", "publish"], cwd=base)
+            assert "draft_id" in json.dumps(contract) and "request_key" in json.dumps(contract)
+            broadcast_result = {"ok": True, "sdk_version": state["sdk_version"], "draft_roundtrip": True,
+                "local_live2d_cue": True, "credentials_present": False, "live_accounts_used": False, "publish_disabled": True}
+
         smoke = invoke("native_browser_localhost_lifecycle", [sys.executable,
             str(ROOT / "maintenance/smoke_actor_runtime.py"), "--runtime", core,
             "--report", str(report / "browser-smoke")], cwd=base, timeout=180)
@@ -197,13 +238,14 @@ def verify(archive: Path, report: Path, *, reply_flow=False) -> dict:
 
     result = {"ok": True, "archive": str(archive), "archive_sha256": digest(archive),
               "archive_integrity": True, "extracted_files_integrity": True,
-              "frozen_checks": 4, "subprocess_checks": len(checks),
+              "frozen_checks": sum(row["name"] in {"core_import", "actor_import", "voice_import", "gui_offscreen", "dependencies_ocr_crypto_playwright"} for row in checks),
+              "subprocess_checks": len(checks),
               "all_launchers": True, "first_run_agent_mode": True,
               "existing_configs_preserved": True, "external_home_supported": True,
               "invalid_home_rejected": True, "unicode_spaces_ampersand_paths": True,
               "system_only_path": True, "mcp_clean_stdio": True,
               **({"reply_flow": reply_result} if reply_flow else {}),
-              "browser": smoke, "live_accounts_used": False,
+              "browser": smoke, "broadcast": broadcast_result, "live_accounts_used": False,
               "live_bot_restarted": False}
     (report / "verification-summary.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     return result
@@ -214,10 +256,11 @@ def main():
     parser.add_argument("--archive", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--reply-flow", action="store_true", help="Also exercise the 3.1 reply/commit --finish flow")
+    parser.add_argument("--broadcast-flow", action="store_true", help="Exercise bundled Bilibili SDK, durable draft and local Live2D cue without an account")
     args = parser.parse_args()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    print(json.dumps(verify(args.archive, args.report, reply_flow=args.reply_flow), ensure_ascii=False))
+    print(json.dumps(verify(args.archive, args.report, reply_flow=args.reply_flow, broadcast_flow=args.broadcast_flow), ensure_ascii=False))
 
 
 if __name__ == "__main__":

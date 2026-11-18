@@ -666,7 +666,7 @@ class MediaTests(unittest.IsolatedAsyncioTestCase):
         app = QApplication.instance() or QApplication([])
         window = BotStudioGUI("gui-test.yaml")
         try:
-            self.assertEqual(window.tabs.count(), 6)
+            self.assertGreaterEqual(window.tabs.indexOf(window.emotion_tab_widget), 0)
             self.assertGreaterEqual(window.tabs.indexOf(window.companion_tab_widget), 0)
             self.assertGreaterEqual(window.tabs.indexOf(window.actor_tab_widget), 0)
             window.media_numbers["max_image_mb"].setValue(7)

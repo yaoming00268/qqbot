@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import threading
+import socket
 
 from runtime_paths import application_home, resource_path
 from ui.studio_api import StudioAPI
@@ -30,7 +31,17 @@ def launch(home=None, *, smoke=False, report=None):
                 time.sleep(.1)
             else:
                 raise RuntimeError("Studio frontend did not initialize")
-            result = window.evaluate_js("window.studio.smoke()")
+            completed, captured = threading.Event(), []
+            def smoke_completed(value):
+                captured.append(value)
+                completed.set()
+            window.evaluate_js("window.studio.smoke()", callback=smoke_completed)
+            if not completed.wait(20):
+                raise RuntimeError("Studio page checks timed out")
+            result = captured[0]
+            result["document_url"] = window.evaluate_js("location.href")
+            if result.get("version") != "20261117-speech-settings":
+                raise RuntimeError("Studio assets did not refresh to the current version: " + json.dumps(result, ensure_ascii=False))
             result.update(engine="pywebview", native=api._native)
             preview = api.preferences({"window_opacity": 86}, persist=False)
             applied = preview.get("data", {}).get("native", {}).get("applied_opacity")
@@ -59,7 +70,13 @@ def launch(home=None, *, smoke=False, report=None):
     window.events.closing += closing
     window.events.maximized += lambda: setattr(api, "_maximized", True)
     window.events.restored += lambda: setattr(api, "_maximized", False)
-    webview.start(gui="edgechromium" if os.name == "nt" else None, debug=False,
+    # pywebview's persistent mode otherwise uses fixed port 42001. If an older
+    # Studio is open, a second instance can silently load that instance's UI.
+    # Select a fresh local origin while keeping all durable state on disk.
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        http_port = listener.getsockname()[1]
+    webview.start(gui="edgechromium" if os.name == "nt" else None, debug=False, http_port=http_port,
         private_mode=False, storage_path=str(home / "data/studio/webview"))
     if smoke and report:
         result = json.loads(Path(report).read_text(encoding="utf-8"))

@@ -1,22 +1,30 @@
 # QQBot 固定 CLI 接口表
 
+语音 `spoken_text` 可选 `[fast]短句[/fast]`、`[slow]短句[/slow]`、`[stretch]短词[/stretch]`，分别为当前速度的 1.2、0.8、0.65 倍（限 0.5–2）。模型按语境自行选择，默认不添加。成对闭合且不可嵌套，可组合情绪及语言标记，不朗读标签；QQ 与直播均支持。
+
 本文件随 MAIN.md 在主会话建立、恢复后的协议更新时载入一次；日常事件不重复接口和规范。
-MCP 快捷回复：qqbot_reply(context_file,text,continue_work=false,reply_to?,mention?,request_key?)。text 支持字符串或字符串数组；普通回复默认显式结束。需继续工具则 continue_work=true，完成后 qqbot_cli action=finish。
+MCP 快捷回复：qqbot_reply(context_file,text,continue_work=false,reply_to?,mention?,request_key?,voice=false,emotion?,spoken_text?)。text 支持字符串或字符串数组；语音仅一条字符串且必须选择真实 emotion，spoken_text 为实际朗读台词。普通回复默认显式结束。需继续工具则 continue_work=true，完成后 qqbot_cli action=finish。
 通用调用：qqbot_cli(action,context_file,operation?,params?)。operation 只用于下列分组操作，参数放 params。context_file 始终取当前事件的 console_context_file；身份、会话和权限由宿主绑定，表中接口不代表已授权。
 命令行：QQBotCLI.exe <命令> [操作] --context-file <当前文件> [--参数 值]。参数名在 CLI 中把下划线改为短横线；task_type 对应 --type。多行或引号正文可用 --text-file/--task-file/--prompt-file/--content-file。
 下面参数名后 * 表示必填；未标记的省略时用宿主默认值。成功回执不等于传输成功，以实际状态为准。
 
 ## 基础命令
 
+- `sing status`：查询唱歌开关、后端与当前角色；唱歌独立于普通语音朗读。
+- `sing cover(song*, lyrics*, emotion, accompaniment, vocals_only, pitch_shift, song_output, request_key)`：歌曲原唱与歌词转为角色歌声，保留原唱旋律、节奏和发音；歌词留档，不换词。song 是本会话文件 ID、授权路径或公网直链，歌词可用 --lyrics-file；默认 emotion=neutral，song_output=file（MP3），可选 voice（腾讯 SILK）或 both。已有干声用 vocals_only=true。
+- `sing compose(song*, lyrics*, language, style, emotion, pitch_shift, song_output, seed, request_key)`：song 为纯伴奏；根据歌词创作演唱，再转换角色声音。language 默认 ja，生成正文转假名并保存原歌词。无导唱不能保证原曲唱法。两种任务返回 id/state；后台完成后用 deliver 批准交付，cancel 可停止，不再派普通 task 模拟唱歌。
+
 - `read-memory(path*, view, query, offset, max_chars)`：读取本轮清单内记忆；默认摘要，query 按话题检索，raw 分页读取原始依据。
   返回：text, view, truncated, next_offset
-- `reply(text*, reply_to, mention, request_key, finish)`：提交正文即发送并确认对方说完，不等 finish。仅回复时加 --finish；有后续工作时省略，完成后独立 finish。同轮可再 reply 补发，重复内容和幂等键复用回执。重复 --text 分气泡，引用/@仅第一条。
+- `voice()`：查询当前启用状态、输出语言、角色、真实情绪标签和说明；选择语音前据此指定情绪。
+- `spoken_text` 支持 VoiceStudio 句内标记：`[emotion:标签]` 持续切换，`[emotion:]` 恢复默认 `emotion`；可与 mixed 语言范围组合。标签须全部来自 `voice.emotions`，提交前原子校验。系统按参考分段流式合成、降噪并编码完整 SILK。
+- `reply(text*, reply_to, mention, request_key, finish, voice, emotion, spoken_text)`：提交正文即发送并确认对方说完，不等 finish。仅回复时加 --finish；有后续工作时省略，完成后独立 finish。同轮可再 reply 补发，重复内容和幂等键复用回执。重复 --text 分气泡，引用/@仅第一条。--voice 走语音合成和腾讯 SILK 转码，必须 --emotion；日语默认用 --spoken-text 写日语台词，前端转为假名。
   返回：state=committed, next_action=continue_or_finish；--finish 返回 finished；不轮询
 - `commit(finish)`：立即提交尚未提交的 message 草稿，不等 finish。--finish 同时显式结束；同轮可多次提交不同批次，重复调用复用回执。
   返回：--finish: state=finished, message_ids, next_action=none；省略: state=committed, next_action=continue_or_finish
 - `finish()`：主代理完成回复与工具调用后，最后调用以结束当前回合；保留已提交回复和后台任务，不输出待命文字。无须发言也可直接调用。
   返回：state=finished, message_ids, next_action=none；不再续写、查接口或调用工具
-- `message(text*, reply_to, mention, request_key)`：暂存复杂多目标消息，commit 才发送；普通回复直接 reply。草稿不会被 finish 或其他已提交批次带出。
+- `message(text*, reply_to, mention, request_key, voice, emotion, spoken_text)`：暂存复杂多目标消息，commit 才发送；普通回复直接 reply。草稿不会被 finish 或其他已提交批次带出。语音参数与 reply 相同。
   返回：id, state=staged；暂存后应 commit
 - `messages(limit)`：查询本会话的真实消息 ID、发送者与正文，用于精确引用和 @。
   返回：messages[].id/sender_id/text/received_at
@@ -138,6 +146,7 @@ MCP 快捷回复：qqbot_reply(context_file,text,continue_work=false,reply_to?,m
 
 ## agents
 
+- 子代理监管：create/send 返回 task_id 后无需轮询；结束当前回合，完成或失败报告会唤醒主代理。tasks/status 查看自己的任务，cancel(request_id=task_id) 停止单封任务，agents close(agent_id) 关闭该身份；unknown 先核实不重发。
 - `agents create(name*, instructions, task_type, text*, files, request_key)`：申请可反复联系的子代理并投递首条任务；同名同职责沿用原身份和工作区。
   返回：id, name, message_id, task_id, state=queued；task_id 可通过 tasks/status/cancel 管理，结果会唤醒主代理
 - `agents send(agent_id*, text*, files, request_key)`：给指定子代理追加消息；忙碌时排队，同一子代理顺序处理，不同子代理并行。
@@ -316,3 +325,5 @@ MCP 快捷回复：qqbot_reply(context_file,text,continue_work=false,reply_to?,m
 - `committed`：正文已提交立即发送；可继续工具，finish 只结束回合
 - `finished`：主代理已主动结束本轮，保留已提交回复和后台任务
 - `accepted`：平台已接受消息
+
+`broadcast` 提供直播和运营接口：`status/account/room/listener/events` 查询及弹幕连接，`speak/perform/avatar` 直播台词、歌曲与角色/OBS控制，`draft/drafts/draft_show/draft_delete` 本机草稿，`publish/receipt/live_start/live_stop/danmaku` 显式外发及回执。只对绑定的主人主代理开放运营操作；直播角色事件仅可使用台词、表情、表演和事件查询。参数与示例使用 `help broadcast <操作>`，发布需要最新草稿版本和唯一 request_key。详情见 BROADCAST_README.md。

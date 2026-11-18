@@ -8,7 +8,7 @@
 
 `python maintenance/history_cleanup.py` 仅预览。`--apply` 只处理 `review_artifacts/<批次>/`、`implementation_artifacts/<批次>/` 内名称明确的旧 `validation*`、`live_<哈希>`、`engine_fixture_<哈希>`、`chrome-smoke` 目录：先按内容 SHA-256 去重压缩，再完整回读验证每个对象、核对原文件未变化，最后删除已归档目录。重解析点、工作区外路径及现有归档会被拒绝。报告、`before` 源码备份与正式 `data` 不参与此清理。
 
-2026-11-08 归档位于 [`history-snapshots.zip`](../maintenance_reports/cleanup_20261108/history-snapshots.zip)，其中的 `manifest.json` 保存原文件路径、大小、修改时间和对象哈希。它使用内容对象存储；请通过恢复命令还原原来的文件路径。删除目录及节省空间的明细保存在同目录 `history-snapshots.result.json`。
+2026-11-08 归档位于 [`history-snapshots.zip`](G:/qqbot/maintenance_reports/cleanup_20261108/history-snapshots.zip)，其中的 `manifest.json` 保存原文件路径、大小、修改时间和对象哈希。它使用内容对象存储；请通过恢复命令还原原来的文件路径。删除目录及节省空间的明细保存在同目录 `history-snapshots.result.json`。
 
 恢复仅写入一个尚不存在的新目录，可用 `--target` 选择清单中的某个快照，重复传入可选择多个；不指定则恢复全部快照。原历史报告中指向快照内部的链接需要先恢复对应快照。
 
@@ -18,7 +18,7 @@ python maintenance/history_cleanup.py --restore-to 'G:\qqbot-history-restored' -
 
 ## 构建运行包
 
-执行 `python maintenance/build_runtime.py --output runtime-new`。构建器拒绝覆盖已有运行包，只打包程序、公开模板和必需资源。构建日志位于 `maintenance_reports/cleanup_20261108`，包内 `build-manifest.json` 保存文件哈希。部署与外部依赖见[多模块运行说明](../build_support/README.md)。
+执行 `python maintenance/build_runtime.py --output runtime-new`。构建器拒绝覆盖已有运行包，只打包程序、公开模板和必需资源。构建日志位于 `maintenance_reports/cleanup_20261108`，包内 `build-manifest.json` 保存文件哈希。部署与外部依赖见[多模块运行说明](G:/qqbot/build_support/README.md)。
 
 ## 便携分发与解压验收
 

@@ -44,6 +44,16 @@ class AgentServiceTimeoutError(AgentServiceError):
     user_message = "⏱️ AI 回复超时，请稍后再试；原对话已保留。"
 
 
+class RepeatedModelOutputError(AgentServiceError):
+    code = "REPEATED_MODEL_OUTPUT"
+    user_message = "模型重复输出且没有工具进展，已请求停止；已有结果保留。"
+
+
+class StopUnconfirmedError(AgentServiceError):
+    code = "STOP_UNCONFIRMED"
+    user_message = "上次模型执行的停止状态尚未确认，原会话暂不可复用。"
+
+
 class AgentServiceBusyError(AgentServiceError):
     code = "MODEL_BUSY"
     user_message = "⚠️ AI 模型服务繁忙，后端重试后仍未取得回复；原对话已保留，请稍后再试。"
@@ -665,6 +675,7 @@ class AntigravityClient:
             and not self._is_summary_session(session_key)
             and self.session_timeout_seconds > 0
             and not session.lock.locked()
+            and not session.chat_state.get("stop_pending")
             and session.is_expired(self.session_timeout_seconds)
         ):
             logger.info(f"会话 {session_key} 已空闲超时，重置上下文")
@@ -1045,29 +1056,47 @@ class AntigravityClient:
 
     async def _retry_run_status(self, conversation_id, *, timeout=5):
         """Read native executor state; neither resume nor resubmit the input."""
-        if not self.ls_address or not self.csrf_token:
-            return None
         import aiohttp
-        url = f"http://{self.ls_address}/exa.language_server_pb.LanguageServerService/GetCascadeTrajectory"
-        try:
-            async with aiohttp.ClientSession(trust_env=False, timeout=aiohttp.ClientTimeout(total=timeout)) as http:
-                async with http.post(url, json={"cascadeId": conversation_id},
-                        headers={"X-Codeium-Csrf-Token": self.csrf_token}) as response:
-                    result = await response.json()
-                    if isinstance(result, dict) and self._conversation_is_missing(
-                            result.get("error") or result.get("message") or ""):
-                        raise ConversationMissingError(conversation_id)
-                    response.raise_for_status()
-                    if isinstance(result, dict):
+
+        deadline = time.monotonic() + timeout
+        for can_reconnect in (True, False):
+            address, token = self.ls_address, self.csrf_token
+            remaining = deadline - time.monotonic()
+            if not address or not token or remaining <= 0:
+                return None
+            credentials = (address, token, self._connection_generation)
+            url = f"http://{address}/exa.language_server_pb.LanguageServerService/GetCascadeTrajectory"
+            try:
+                async with aiohttp.ClientSession(trust_env=False, timeout=aiohttp.ClientTimeout(total=remaining)) as http:
+                    async with http.post(url, json={"cascadeId": conversation_id},
+                            headers={"X-Codeium-Csrf-Token": token}) as response:
+                        result = await response.json()
+                        if isinstance(result, dict) and self._conversation_is_missing(
+                                result.get("error") or result.get("message") or ""):
+                            raise ConversationMissingError(conversation_id)
+                        response.raise_for_status()
+                        if not isinstance(result, dict):
+                            return None
                         from agent_transcript import native_diagnostic_rows
                         diagnostic = native_diagnostic_rows(result.get("trajectory") or {})
                         return {"status": result.get("status"), "numTotalSteps": result.get("numTotalSteps"),
                                 **({"diagnostic_rows": diagnostic} if diagnostic else {})}
-        except ConversationMissingError:
-            raise
-        except Exception as error:
-            # Unknown state is not evidence that retries have stopped.
-            logger.debug("[%s] 后端重试状态暂未确认: %s", conversation_id, type(error).__name__)
+            except ConversationMissingError:
+                raise
+            except Exception as error:
+                logger.debug("[%s] 后端重试状态暂未确认: %s", conversation_id, type(error).__name__)
+                if not can_reconnect or not isinstance(error, aiohttp.ClientConnectorError):
+                    return None
+                if not (isinstance(error.os_error, ConnectionRefusedError)
+                        or getattr(error.os_error, "winerror", None) == 10061):
+                    return None
+                try:
+                    refreshed = await asyncio.wait_for(self._refresh_connection(credentials, deadline),
+                        timeout=max(0.0, deadline - time.monotonic()))
+                except TimeoutError:
+                    return None
+                if not refreshed:
+                    return None
         return None
 
     async def _wait_for_model_response(
@@ -1140,6 +1169,13 @@ class AntigravityClient:
                             merged[step_index(row)] = row
                     all_rows = [merged[index] for index in sorted(merged)]
                 rows, found, interrupted = select_request_rows(all_rows, expected_step_min, request_marker)
+                if found and request_marker and stop_requested and not interrupted:
+                    from agent_transcript import has_pending_tool_calls, repeated_model_output
+                    if (repeated_model_output(rows, long_idle=time.monotonic() - start_time >= 60)
+                            and not has_pending_tool_calls(rows)):
+                        if mode == "reported":
+                            raise ReplyDeferred("finished")
+                        raise RepeatedModelOutputError()
                 if single_response:
                     first = next((index for index, row in enumerate(rows) if row.get("type") == "PLANNER_RESPONSE"
                         and row.get("source") == "MODEL" and row.get("status") == "DONE" and not row.get("tool_calls")
@@ -1275,21 +1311,86 @@ class AntigravityClient:
                     task.cancel()
             await asyncio.gather(sender, waiter, return_exceptions=True)
 
+    async def _confirm_native_idle(self, conversation_id, *, timeout=2.0, retry_stop=None):
+        """Confirm stop without resending input; unknown remains unknown."""
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            try:
+                state = await asyncio.wait_for(self._retry_run_status(conversation_id, timeout=remaining), remaining)
+            except ConversationMissingError:
+                return True
+            except Exception:
+                return False
+            status = state.get("status") if isinstance(state, dict) else None
+            if status == "CASCADE_RUN_STATUS_IDLE":
+                return True
+            if status == "CASCADE_RUN_STATUS_RUNNING" and retry_stop is not None:
+                return await retry_stop()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            await asyncio.sleep(min(.2, remaining))
+
     async def _cancel_native_conversation(self, conversation_id: str, *, kill_background_tasks=True):
-        """End the server generation, optionally retaining its background tasks."""
-        if not self.ls_address or not self.csrf_token:
-            return
-        import aiohttp
-        url = f"http://{self.ls_address}/exa.language_server_pb.LanguageServerService/CancelCascadeInvocation"
-        try:
-            async with aiohttp.ClientSession(trust_env=False, timeout=aiohttp.ClientTimeout(
-                    total=5 if kill_background_tasks else 1)) as http:
-                async with http.post(url, json={"cascadeId": conversation_id, "killBackgroundTasks": kill_background_tasks,
-                                               "notifyParent": False},
-                                     headers={"X-Codeium-Csrf-Token": self.csrf_token}) as response:
-                    response.raise_for_status()
-        except Exception:
-            logger.warning("原生检索任务的后端取消未获确认。")
+        """Request cancellation and quarantine an owned CID until confirmed idle."""
+        owners = [(key, session, session.generation) for key, session in self._sessions.items()
+                  if session.conversation_id == conversation_id]
+        def update(pending):
+            changed = False
+            for key, session, generation in owners:
+                if (self._sessions.get(key) is not session or session.generation != generation
+                        or session.conversation_id != conversation_id):
+                    continue
+                if pending:
+                    session.chat_state["stop_pending"] = conversation_id
+                elif session.chat_state.get("stop_pending") == conversation_id:
+                    session.chat_state.pop("stop_pending", None)
+                changed = True
+            if changed:
+                self._save_sessions()
+        update(True)
+        if self.ls_address and self.csrf_token:
+            import aiohttp
+            url = f"http://{self.ls_address}/exa.language_server_pb.LanguageServerService/CancelCascadeInvocation"
+            try:
+                async with aiohttp.ClientSession(trust_env=False, timeout=aiohttp.ClientTimeout(total=2)) as http:
+                    async with http.post(url, json={"cascadeId": conversation_id, "killBackgroundTasks": kill_background_tasks,
+                                                   "notifyParent": False}, headers={"X-Codeium-Csrf-Token": self.csrf_token}) as response:
+                        response.raise_for_status()
+            except Exception:
+                logger.warning("[%s] 停止请求未获回执，继续确认执行状态。", conversation_id)
+        confirmed = await self._confirm_native_idle(conversation_id)
+        if confirmed:
+            update(False)
+        else:
+            logger.warning("[%s] 停止未确认，原会话暂时隔离。", conversation_id)
+        return confirmed
+
+    async def _resolve_pending_stop(self, session, generation, conversation_id):
+        def check_owner():
+            self._check_generation(session, generation)
+            if self._sessions.get(session.session_key) is not session or session.conversation_id != conversation_id:
+                raise SessionInvalidatedError("会话在确认停止期间已变化。")
+
+        async def retry_stop():
+            check_owner()
+            if session.chat_state.get("stop_pending") != conversation_id:
+                return False
+            # Older pending records only identify the CID. Preserve background
+            # tasks in case the original stop was for an interrupted chat turn.
+            return await self._cancel_native_conversation(conversation_id, kill_background_tasks=False)
+
+        # The status read may need to rediscover a restarted local server.
+        confirmed = await self._confirm_native_idle(conversation_id, timeout=5.0, retry_stop=retry_stop)
+        check_owner()
+        if confirmed is not True:
+            raise StopUnconfirmedError()
+        if session.chat_state.get("stop_pending") == conversation_id:
+            session.chat_state.pop("stop_pending")
+            self._save_sessions()
 
     def _last_transcript_step(self, conversation_id):
         from agent_transcript import TranscriptReader
@@ -1403,6 +1504,9 @@ class AntigravityClient:
 
         async with session.lock:
             self._check_generation(session, generation)
+            pending_cid = session.chat_state.get("stop_pending")
+            if pending_cid and pending_cid == session.conversation_id:
+                await self._resolve_pending_stop(session, generation, pending_cid)
             session.last_active = time.time()
             clean_text = user_text.strip()
             if not clean_text:
@@ -1563,7 +1667,8 @@ class AntigravityClient:
             except asyncio.CancelledError:
                 if active_conversation_id:
                     await self._cancel_native_conversation(active_conversation_id)
-                if (session.generation == generation and not self._is_chat_session(session_key)
+                if (session.generation == generation and not session.chat_state.get("stop_pending")
+                        and not self._is_chat_session(session_key)
                         and not self._is_probe_session(session_key)
                         and not self._is_summary_session(session_key)
                         and ":view:" not in session_key):
@@ -1589,7 +1694,9 @@ class AntigravityClient:
                     await self._cancel_native_conversation(active_conversation_id)
                 raise
             except AgentServiceError as error:
-                logger.warning("[%s] 后端已终止本轮（%s），保留原会话并释放回复队列。", session_key, error.code)
+                if isinstance(error, RepeatedModelOutputError) and active_conversation_id:
+                    await self._cancel_native_conversation(active_conversation_id, kill_background_tasks=False)
+                logger.warning("[%s] 本轮等待已结束（%s）；原会话已保留，停止未确认时暂停复用。", session_key, error.code)
                 if response_trace is not None and active_conversation_id:
                     response_trace.extend(self._read_response_trace(active_conversation_id, trace_step_min, request_marker))
                 raise

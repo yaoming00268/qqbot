@@ -5,9 +5,10 @@ bootstrap_test_module(__name__, __file__)
 import asyncio
 import json
 from pathlib import Path
+import socket
 import tempfile
 import unittest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from antigravity_client import (AgentServiceError, AntigravityClient, ContentBlockedError,
                                ConversationMissingError, SessionInvalidatedError)
@@ -245,6 +246,27 @@ class NativeRetryStatusTests(unittest.IsolatedAsyncioTestCase):
         from aiohttp import web
         self.responses.append(web.Response(status=503, text="temporarily unavailable"))
         self.assertIsNone(await self.ai._retry_run_status("fixture"))
+
+    async def test_read_only_status_reconnects_after_local_port_changes(self):
+        from aiohttp import web
+
+        address = self.ai.ls_address
+        self.responses.append(web.json_response({"status": "CASCADE_RUN_STATUS_IDLE"}))
+        self.ai._is_ready = True
+        session = self.ai.get_or_create_session("group_test")
+        session.conversation_id = session.chat_state["stop_pending"] = "fixture"
+        self.ai._run_agentapi_cmd = AsyncMock(side_effect=RuntimeError("send reached"))
+        with socket.socket() as refused:
+            refused.bind(("127.0.0.1", 0))
+            self.ai.ls_address = f"127.0.0.1:{refused.getsockname()[1]}"
+            with patch.object(self.ai, "_discover_ls_credentials", return_value=(address, "refreshed")) as discover:
+                with self.assertRaisesRegex(RuntimeError, "send reached"):
+                    await self.ai.chat("group_test", "新消息", raise_on_error=True)
+        self.assertNotIn("stop_pending", session.chat_state)
+        self.assertEqual(discover.call_count, 1)
+        self.assertTrue(discover.call_args.kwargs["refresh"])
+        self.assertEqual(self.requests, [("/exa.language_server_pb.LanguageServerService/GetCascadeTrajectory",
+                                         {"cascadeId": "fixture"}, "refreshed")])
 
     async def test_explicit_missing_conversation_still_allows_recovery(self):
         from aiohttp import web

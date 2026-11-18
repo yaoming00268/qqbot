@@ -256,18 +256,9 @@ class OneBotClient(MediaClientMixin):
         """根据当前人设预设与配置动态刷新全局 System Prompt"""
         # 实时检测 config.yaml 变更（主人设置、专属称谓等热更新）
         try:
-            cfg_path = getattr(self, "config_path", "config.yaml")
-            if os.path.exists(cfg_path):
-                mtime = os.path.getmtime(cfg_path)
-                if not hasattr(self, "_config_mtime"):
-                    self._config_mtime = mtime
-                elif mtime > self._config_mtime:
-                    self._config_mtime = mtime
-                    from config import AppConfig
-                    fresh_cfg = AppConfig.load(cfg_path)
-                    self.app_config.bot = fresh_cfg.bot
-                    self.app_config.agent = fresh_cfg.agent
-                    logger.info("⚡ [OneBot] 检测到 config.yaml 变更，已热更新主人与群专属配置！")
+            from voice_live import reload_config
+            if reload_config(self):
+                logger.info("[OneBot] 已应用保存的行为与语音配置，当前声音：%s", self.app_config.voice.character)
         except Exception as e:
             logger.debug(f"热重载配置异常: {e}")
 
@@ -373,8 +364,11 @@ class OneBotClient(MediaClientMixin):
         return await self._send_text("send_private_msg", "user_id", user_id, message)
 
     async def _send_text(self, action, id_key, target, message):
-        key = self._chat_session_key(f"onebot_{'group' if id_key == 'group_id' else 'private'}_{target}")
+        source_key = f"onebot_{'group' if id_key == 'group_id' else 'private'}_{target}"
+        key = self._chat_session_key(source_key)
         async with self._reply_turn(key):
+            if self._chat_session_key(source_key) != key:
+                return {"status": "cancelled", "data": {"reason": "排队期间对话关联已变更"}}
             return await self._send_text_parts(action, id_key, target, message)
 
     async def _send_text_parts(self, action, id_key, target, message):
@@ -388,15 +382,17 @@ class OneBotClient(MediaClientMixin):
         from persona_isolation import session_is_active, identity, effective_persona
         account_key = self.account_key
         scope = f"onebot:{account_key}:{'group' if id_key == 'group_id' else 'private'}:{target}"
-        key = self._chat_session_key(f"onebot_{'group' if id_key == 'group_id' else 'private'}_{target}")
+        source_key = f"onebot_{'group' if id_key == 'group_id' else 'private'}_{target}"
+        key = self._chat_session_key(source_key)
         generation = session_generation(self.ai, key)
-        persona = effective_persona(self, str(target) if id_key == 'group_id' else "")
+        persona = effective_persona(self, str(target) if id_key == 'group_id' else "",
+            key=f"onebot_{'group' if id_key == 'group_id' else 'private'}_{target}")
         persona_id = identity(self, persona)
         account_id = str(getattr(self, "self_id", "") or (self.account_config.account_id if self.account_config else ""))
         has_source = id_key == "group_id" and bool(text.reply_to)
         def current_reply():
             return (self.account_key == account_key and generation_is_current(self.ai, key, generation)
-                    and session_is_active(self, key) and
+                    and session_is_active(self, key) and self._chat_session_key(source_key) == key and
                     (not has_source or not text.reply_supersedable or
                      not self._chat_turns.superseded(scope, text.reply_to, text.reply_sender)))
         for index, chunk in enumerate(split_text(text.body, self.app_config.bot.max_reply_length)):
@@ -423,6 +419,7 @@ class OneBotClient(MediaClientMixin):
                 guard_meta = {
                     "account_id": account_id,
                     "session_key": key,
+                    "source_key": source_key,
                     "generation": generation,
                     "persona_id": persona_id,
                     "scope": scope,
@@ -457,9 +454,8 @@ class OneBotClient(MediaClientMixin):
             return {**response, "parts": receipts}
         return response
 
-    def _bot_names(self, group_id=""):
-        persona_name = self.app_config.bot.get_persona_name(str(group_id)) or self.personas.active_persona_name
-        persona = self.personas.get_preset(persona_name) or self.personas.get_active_persona()
+    def _bot_names(self, group_id="", *, key=""):
+        persona = persona_for(self, str(group_id), key)
         return list(dict.fromkeys(name for name in
             [self.app_config.bot.bot_name, self.account_config.name, persona.name, *persona.aliases] if name))
 
@@ -481,11 +477,17 @@ class OneBotClient(MediaClientMixin):
         if session_key and not session_is_active(self, session_key):
             logger.info("出站消息会话人设已不再活跃 (%s)，已取消发送。", session_key)
             return False
+        scope = guard_meta.get("scope", "")
+        target = scope.rsplit(":", 1)[-1]
+        source_key = guard_meta.get("source_key") or (
+            f"onebot_{'group' if ':group:' in scope else 'private'}_{target}" if scope else "")
+        if source_key and session_key and self._chat_session_key(source_key) != session_key:
+            logger.info("出站消息来源已改为其他对话上下文，已取消发送。")
+            return False
         persona_id = guard_meta.get("persona_id")
         if persona_id:
-            scope = guard_meta.get("scope", "")
-            target_group = scope.split(":")[-1] if ":group:" in scope else ""
-            current_p = effective_persona(self, target_group)
+            target_group = target if ":group:" in scope else ""
+            current_p = effective_persona(self, target_group, key=source_key)
             if identity(self, current_p) != persona_id:
                 logger.info("出站消息人设身份已变更 (%s)，已取消发送。", persona_id)
                 return False
@@ -515,7 +517,7 @@ class OneBotClient(MediaClientMixin):
         target = str(data.get("group_id") if is_group else data.get("user_id", ""))
         if not target or str(data.get("user_id", "")) == self.self_id:
             return
-        if data.get("message_id") and str(data["message_id"]) in self._processed_msg_ids:
+        if data.get("message_id") and self._event_identity(data) in self._processed_msg_ids:
             return
         if data.get("post_type") == "notice":
             if not (data.get("notice_type") == "poke" or
@@ -526,7 +528,8 @@ class OneBotClient(MediaClientMixin):
         segments = data.get("message") if isinstance(data.get("message"), list) else None
         raw = data.get("raw_message") or data.get("message") or ""
         clean, at_bot, _ = clean_cq_mentions(raw if isinstance(raw, str) else "", self.self_id,
-            segments=segments, bot_names=self._bot_names(target if is_group else ""))
+            segments=segments, bot_names=self._bot_names(target if is_group else "",
+                key=f"onebot_{'group' if is_group else 'private'}_{target}"))
         sender = data.get("sender") or {}
         name = sender.get("card") or sender.get("nickname") or ""
         directed = (not is_group or at_bot or data.get("post_type") == "notice" or
@@ -540,7 +543,9 @@ class OneBotClient(MediaClientMixin):
         if is_group and data.get("post_type") == "message":
             self._proactive_chat.observe(target, event.message_id, received_at=event.received_at)
         from persona_isolation import effective_persona
-        event.persona = effective_persona(self, str(target) if is_group else "").model_copy(deep=True)
+        from conversation_routing import source_base
+        event.persona = effective_persona(self, str(target) if is_group else "",
+            key=source_base(self, target, is_group)).model_copy(deep=True)
         runtime = self._get_runtime()
         from media_router import parse_media_intent, is_work_request, is_priority_control
         intent = parse_media_intent(clean, self.app_config.media.default_image_count) if directed else None
@@ -650,14 +655,19 @@ class OneBotClient(MediaClientMixin):
             self._recent_messages_cache.pop(next(iter(self._recent_messages_cache)))
         self._queue_event(data, _reference_resolved=True, _received_at=received_at)
 
+    def _event_identity(self, data):
+        is_group = data.get("message_type") != "private" and bool(data.get("group_id"))
+        target = data.get("group_id") if is_group else data.get("user_id", "")
+        return (self._image_scope(str(target), is_group), str(data.get("message_id", "")))
+
     def _record_passive_event(self, data, clean, name):
         """Coalescing reply opportunities must not erase the group transcript."""
         group_id, user_id = str(data.get("group_id", "")), str(data.get("user_id", ""))
         message_id = str(data.get("message_id", ""))
-        if message_id and message_id in self._processed_msg_ids:
+        if message_id and self._event_identity(data) in self._processed_msg_ids:
             return
         if message_id:
-            self._processed_msg_ids.append(message_id)
+            self._processed_msg_ids.append(self._event_identity(data))
         self._cache_member_name(group_id, user_id, name)
         from persona_isolation import persona_scope
         from conversation_runtime import current_event
@@ -1234,10 +1244,10 @@ class OneBotClient(MediaClientMixin):
             return
 
         # 去重
-        if message_id and message_id in self._processed_msg_ids:
+        if message_id and self._event_identity(data) in self._processed_msg_ids:
             return
         if message_id:
-            self._processed_msg_ids.append(message_id)
+            self._processed_msg_ids.append(self._event_identity(data))
 
         from conversation_runtime import current_event
         if current_event.get() is None:
@@ -1717,16 +1727,16 @@ class OneBotClient(MediaClientMixin):
             return
         message_id = str(data.get("message_id", "") or "")
         if message_id:
-            if message_id in self._processed_msg_ids:
+            if self._event_identity(data) in self._processed_msg_ids:
                 return
-            self._processed_msg_ids.append(message_id)
+            self._processed_msg_ids.append(self._event_identity(data))
         raw_message = data.get("raw_message", "") or data.get("message", "")
         message_segments = data.get("message") if isinstance(data.get("message"), list) else None
 
         from conversation_runtime import current_event
         event = current_event.get()
         original, _, _ = clean_cq_mentions(raw_message if isinstance(raw_message, str) else "", self.self_id,
-                                          segments=message_segments, bot_names=self._bot_names(""))
+            segments=message_segments, bot_names=self._bot_names("", key=f"onebot_private_{user_id}"))
         self._observe_chat(self._image_scope(user_id, False), message_id, user_id, original,
                            event.received_at if event else time.time())
 
@@ -1862,7 +1872,7 @@ class OneBotClient(MediaClientMixin):
                 if not decision.should_reply:
                     return
 
-                active_persona = self.personas.get_active_persona()
+                active_persona = persona_for(self, "", session_key)
                 final_reply = await self._send_decision_messages(decision, media_ctx, active_persona.name)
                 if not final_reply or not generation_is_current(self.ai, session_key, generation):
                     return

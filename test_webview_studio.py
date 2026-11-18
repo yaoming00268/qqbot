@@ -4,12 +4,14 @@ bootstrap_test_module(__name__, __file__)
 
 import io
 import json
+import sys
+import types
 from pathlib import Path
 import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from config import AppConfig
 from ui.studio_api import StudioAPI, validated_preferences
@@ -27,6 +29,33 @@ class StudioBridgeTests(unittest.TestCase):
     def ok(self, result):
         self.assertTrue(result["ok"], result)
         return result["data"]
+
+    def test_browser_transport_uses_dedicated_profile_and_persists(self):
+        from config import GeminiWebConfig
+        from pydantic import ValidationError
+
+        self.assertEqual(GeminiWebConfig().transport, "cookie")
+        with self.assertRaises(ValidationError):
+            GeminiWebConfig(page_profile_dir="   ")
+        changes = {"media": {"gemini_web": {"transport": "browser", "page_profile_dir": "profiles/gemini"}}}
+        self.ok(self.api.save_config(changes, self.initial["revision"]))
+        self.assertEqual(AppConfig.load(str(self.config_path)).media.gemini_web.transport, "browser")
+        account = {"source": "browser", "status": "ok", "models": [{"name": "pro", "available": True}]}
+        page = types.ModuleType("gemini_page_browser")
+        page.launch_page_login = Mock()
+        page.inspect_page_account = AsyncMock(return_value=account)
+        with patch.dict(sys.modules, {"gemini_page_browser": page}):
+            self.ok(self.api.browser_tools("connect"))
+            self.assertEqual(Path(page.launch_page_login.call_args.args[0].page_profile_dir), self.home / "profiles/gemini")
+            self.ok(self.api.browser_tools("inspect"))
+            for _ in range(400):
+                result = self.ok(self.api.poll())
+                if result["status"]["task"]["state"] != "running":
+                    break
+                time.sleep(.01)
+            self.assertEqual(result["status"]["task"]["state"], "completed", result)
+            self.assertEqual(result["status"]["task"]["result"], account)
+            self.assertEqual(Path(page.inspect_page_account.call_args.args[0].page_profile_dir), self.home / "profiles/gemini")
 
     def test_partial_save_preserves_credentials_and_unedited_config(self):
         config = AppConfig.load(str(self.config_path))

@@ -20,14 +20,39 @@ def authorize(command, context):
 
 
 def _save(client, section, field, value):
-    old = getattr(section, field)
-    setattr(section, field, value)
-    try:
-        client.app_config.save(getattr(client, "config_path", "config.yaml"))
-    except BaseException:
-        setattr(section, field, old)
-        raise
-    if section is client.app_config.media:
+    from config import AppConfig, config_lock
+    name = next((name for name in type(client.app_config).model_fields
+                 if getattr(client.app_config, name) is section), None)
+    group_id = next((key for key, group in client.app_config.bot.group_settings.items()
+                     if group is section), None)
+    path = getattr(client, "config_path", "config.yaml")
+    with config_lock(path):
+        if name is None:
+            if group_id is None:
+                raise ValueError("未知配置分区。")
+            from pathlib import Path
+            latest = AppConfig.load(path, create=False) if Path(path).is_file() else client.app_config.model_copy(deep=True)
+            group = latest.bot.get_group_config(group_id)
+            if group is None:
+                raise ValueError("群配置已被其他窗口删除，请重新载入。")
+            setattr(group, field, value)
+            changes = {"bot": {"group_settings": latest.bot.group_settings}}
+        else:
+            changes = {name: {field: value}}
+        updated = AppConfig.update_fields(path, changes, fallback=client.app_config)
+    if group_id is not None:
+        for attribute in type(section).model_fields:
+            setattr(section, attribute, getattr(updated.bot.group_settings[group_id], attribute))
+        updated.bot.group_settings[group_id] = section
+    # Preserve the edited section's identity for the command currently using it.
+    for key in type(client.app_config).model_fields:
+        fresh = getattr(updated, key)
+        if key == name:
+            for attribute in type(fresh).model_fields:
+                setattr(section, attribute, getattr(fresh, attribute))
+        else:
+            setattr(client.app_config, key, fresh)
+    if name == "media":
         client._get_media_service()
 
 

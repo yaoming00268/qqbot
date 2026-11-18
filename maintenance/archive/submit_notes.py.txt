@@ -1,0 +1,69 @@
+# -*- coding: utf-8 -*-
+import sys, subprocess, json
+
+ctx = r'G:\qqbot\data\sandbox\sessions\44d77c3d8b074662b8dea3909839ffdb\contexts\f75085d29b5ba4c29c6dcbd1.json'
+cli = r'G:\qqbot\console_tools\cli.py'
+py = r'G:\shiyan\anaconda\python.exe'
+
+obs_text = """【鲲 Galgame 论坛长文评测浏览记录】
+帖子标题：Gal游玩记录——D.C.4 PH/SH 玩后感，太好玩了吧（微剧透慎入）
+帖子链接：https://www.kungal.com/topic/2495
+帖子作者：鹭泽有里咲
+板块分类：长文评价
+浏览范围：正文完整阅读（全帖无回复，已读至底部）
+
+核心要点记录：
+1. 游玩背景：作者在通关《播种之谣》、《女仆咖啡帕露菲》及《突然恋人》（主推妹线与北大路可怜线）等非校园题材作品后，因群友安利日和的双枪CG入坑初音岛系列的《D.C.4 PH/SH》（Da Capo 4 Plus Harmony / Sweet Harmony）。
+2. 缺点批评：
+   - 妹线（镜二乃线）设计失衡：作者自称“妹妹党”，但在二乃线体验极差，批评男女主感情升温时反复被生硬打断压制，进线后长时间处于低气压与无由来的情感拉扯，揭晓缘由后更显前期拉扯冗余。
+   - 线路解锁机制刻意：吐槽必须先通关有里咲线才能解锁有里栖线。
+   - 转场白屏过频，容易造成提前进ED的假象；HS CG数量较少且存在复用。
+3. 优点赞许：
+   - 校园青春感拔群：K4社团建立与群像互动极其热闹，灵魂角色杉并与基友团助攻让共通线趣味十足，作者认为整体日常体验明显优于DC5较为割裂的共通线。
+   - 双人共通线机制：两人一组的分组剧情（如日和与美羽组）展现了独特的角色化学反应与争宠趣味。
+   - 表现力细节：盛赞马戏团采用的“背身立绘”（正面与背身交替、转身回头机制），使多人围坐谈话更具现实空间沉浸感。
+   - 恋爱节奏掌控：进线至表白铺垫长、暧昧拉扯足，表白后进ED但之后衔接了充实的交往后日常。
+   - 真女主塑造顶峰：鹭泽有里咲（Arisu）的婚纱CG与共通线待遇极具真女主气场，剧情深度可与《纸魔》月社妃、《樱之杜》秋津原秋萤及《青鸟》海野明理并列；FD后夜祭舞台剧与个人线的回收演出尤为惊艳，最终以全家福大合影圆满收尾。"""
+
+with open(r'G:\qqbot\topic_2495_obs.txt', 'w', encoding='utf-8') as f:
+    f.write(obs_text)
+
+ref_text = """读完这位楼主对《D.C.4 PH/SH》的细致评价，小光觉得很有启发呢，前辈。
+
+楼主身为喜欢妹妹角色的玩家，却对本作的二乃线给出了相当严厉的批评。小光很能理解这种心情，明明两个人朝夕相处、关系本该最为亲近自然，剧情却为了刻意制造戏剧冲突而强行拉扯、压抑心意，反而破坏了妹系角色最宝贵的那种无条件依赖与温暖日常。如果彼此心里明明在意对方，却总是低气压地互相推开，无论对屏幕前的玩家还是对故事里的主角来说，都会觉得很心累吧。真正的羁绊，还是像平日里那样坦率地互相关心、哪怕偶尔犯傻也能笑在一起更让人心安。
+
+不过楼主对K4社团的热闹氛围、好友助攻以及背身立绘细节的赞赏，小光也非常赞同。大家聚在活动室里吵吵闹闹、为了同一个目标努力的场景，总会让人联想起幽灵部和前辈在一起的那些时光呢。不管是多人的默契还是不经意间回过头对视的小动作，都是青春日常里不可替代的温度。能看到初音岛系列在日常与真女主线上带给玩家这么充实的治愈感，小光也觉得心里暖洋洋的。"""
+
+with open(r'G:\qqbot\topic_2495_ref.txt', 'w', encoding='utf-8') as f:
+    f.write(ref_text)
+
+print('Files written')
+
+evidences = [
+    'ee8ee273a40d43c0a7db5eabf7f30e1a',
+    '1a83de5547f747388b1ebe62cd676e25',
+    'a03978b47d144baa8c569aea53a40d49',
+    '4c73f331a0c54e39a759f0acfce75c43',
+    '1cd98feeb7384aa0b0f824ca2b281de1',
+    'f6607b8c77584fc2ac2177f489bcce6b',
+    'eb180c3a350e4d23b65ed9420df8889d',
+    '0a5bff9ca31c4bdca80796a90e7f74f5'
+]
+
+# 1. Observation note
+cmd_obs = [py, cli, 'sandbox', 'note', '--context-file', ctx, '--kind', 'observation', '--text-file', r'G:\qqbot\topic_2495_obs.txt']
+for ev in evidences:
+    cmd_obs.extend(['--evidence', ev])
+r_obs = subprocess.run(cmd_obs, capture_output=True, text=True, encoding='utf-8')
+print('Obs note result:', r_obs.stdout.strip())
+if r_obs.stderr:
+    print('Obs note err:', r_obs.stderr.strip())
+
+# 2. Reflection note
+cmd_ref = [py, cli, 'sandbox', 'note', '--context-file', ctx, '--kind', 'reflection', '--text-file', r'G:\qqbot\topic_2495_ref.txt']
+for ev in evidences:
+    cmd_ref.extend(['--evidence', ev])
+r_ref = subprocess.run(cmd_ref, capture_output=True, text=True, encoding='utf-8')
+print('Ref note result:', r_ref.stdout.strip())
+if r_ref.stderr:
+    print('Ref note err:', r_ref.stderr.strip())

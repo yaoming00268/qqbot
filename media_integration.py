@@ -167,6 +167,7 @@ class MediaClientMixin:
             slots = 5 - ctx.sequence
             while len(batches) > slots:
                 join = next((index for index in range(len(batches) - 1) if
+                    not batches[index].get("voice") and not batches[index + 1].get("voice") and
                     (batches[index].get("reply_to"), batches[index].get("mention")) ==
                     (batches[index + 1].get("reply_to"), batches[index + 1].get("mention"))), None)
                 if join is None:
@@ -198,8 +199,19 @@ class MediaClientMixin:
             source_id = reply_to or ctx.message_id
             source = self._chat_turns.source(ctx.scope, source_id)
             sender_id = source.get("sender_id", ctx.sender_id)
+            voice_submitted = False
+            def voice_submitting():
+                nonlocal voice_submitted
+                voice_submitted = True
             try:
-                if hasattr(self, "send_action"):
+                if item.get("voice"):
+                    from voice_delivery import deliver_voice
+                    receipt = await deliver_voice(self, console, ctx, item, before_submit=voice_submitting)
+                    if ctx.is_group:
+                        self._chat_turns.mark_replied(ctx.scope, source_id)
+                        emit_reply(group_id=ctx.conversation_id, sender_id=sender_id, source_message_id=source_id,
+                            source_text=source.get("text", ctx.text), reply=text, quoted=bool(reply_to))
+                elif hasattr(self, "send_action"):
                     outbound = OutboundText(text, mention=mention, quote=reply_to,
                         reply_to=source_id if ctx.is_group else "", reply_sender=sender_id,
                         reply_supersedable=ctx.reply_supersedable and not reply_to, reply_quote=False)
@@ -256,14 +268,17 @@ class MediaClientMixin:
                 # Once submission began, cancellation or a lost receipt cannot
                 # prove that QQ rejected it. Persist uncertainty without replay.
                 for identity in identities:
-                    console.broker.message_state(identity, "unknown" if isinstance(error, (SendUnknown, asyncio.CancelledError)) else "failed",
+                    console.broker.message_state(identity,
+                        "cancelled" if item.get("voice") and not voice_submitted and isinstance(error, asyncio.CancelledError)
+                        else "unknown" if isinstance(error, (SendUnknown, asyncio.CancelledError)) else "failed",
                                                  {"error": str(error)})
                 raise
         if ctx.ai_session_key and ctx.guard():
             session = self.ai.get_or_create_session(ctx.ai_session_key.removeprefix("__work__:"))
-            session.chat_state["last_delivery"] = {"source_message_id": ctx.message_id,
+            from conversation_routing import remember_turn_state
+            remember_turn_state(session.chat_state, "last_delivery", ctx.scope, {"source_message_id": ctx.message_id,
                 "state": "queued" if queued else "sent" if delivered else "suppressed",
-                "segments_sent": sent_count, "segments_queued": queued}
+                "segments_sent": sent_count, "segments_queued": queued})
             self.ai._save_sessions()
         return "\n".join(delivered)
 
@@ -309,7 +324,7 @@ class MediaClientMixin:
                 IdleMemory(console.directory(key), session_generation(self.ai, key)).append([
                     {"message_id": message_id, "author_id": "bot", "author_name": persona_name, "is_bot": True,
                      "content": text, "timestamp": time.time(), "source_message_id": ctx.message_id,
-                     "reply_to": reply_to or ctx.message_id, "delivery_state": "accepted"}])
+                     "reply_to": reply_to or ctx.message_id, "delivery_state": "accepted", "source_scope": ctx.scope}])
             except (OSError, ValueError):
                 # A local archive failure cannot turn a confirmed QQ receipt
                 # into a failed send or authorize a replay.
@@ -784,8 +799,13 @@ class MediaClientMixin:
 
     def _make_media_context(self, *, session_key, user_id, conversation_id, message_id="", text="",
                             is_group=False, reply=None, quoted_images=(), received_at=None):
-        from persona_isolation import session_is_active
+        from persona_isolation import session_is_active, base_session
         session_key = self._chat_session_key(session_key)
+        from conversation_routing import BASE_RE, source_base
+        source_key = source_base(self, conversation_id, is_group)
+        source_session = self._chat_session_key(source_key)
+        source_matches = (not BASE_RE.fullmatch(base_session(session_key).removeprefix("__work__:"))
+                          or source_session == session_key.removeprefix("__work__:"))
         is_onebot = hasattr(self, "send_action")
         generation = session_generation(self.ai, session_key)
         from conversation_runtime import current_event
@@ -830,4 +850,5 @@ class MediaClientMixin:
             cache_sent=cache_sent,
             ai_client=self.ai, ai_session_key=session_key,
             wait_transport=wait_transport if is_onebot and self._runtime else None,
-            guard=lambda: generation_is_current(self.ai, session_key, generation) and session_is_active(self, session_key))
+            guard=lambda: source_matches and generation_is_current(self.ai, session_key, generation) and session_is_active(self, session_key)
+                and self._chat_session_key(source_key) == source_session)

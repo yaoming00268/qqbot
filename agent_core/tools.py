@@ -39,6 +39,17 @@ def operate(broker, token, operation, *, account_id="", url="", text="", draft_i
         return {"id": identity, "state": "saved"}
     if not account_id:
         raise ValueError("请使用 accounts 返回的 account_id。")
+    account = store.account(account_id, actor_id)
+    if account["platform"] == "bilibili" and account["config"].get("adapter") == "broadcast":
+        if not account["enabled"]:
+            raise PermissionError("B站账号已停用。")
+        if operation == "draft" and draft_kind == "publish_post" and not url:
+            # Compatibility for existing turns that still choose actor draft.
+            # Reuse the native authority/lease checks; drafts stay local.
+            from broadcast_commands import operate as broadcast_operate
+            return broadcast_operate(broker, token, "draft", broadcast_kind="dynamic", text=text)
+        raise ValueError("B站账号使用原生 action=broadcast。草稿用 operation=draft，发布需 draft_id 和 revision，"
+                         "阅读用 feed/search/video/comments；无需更改 actions。")
     if operation == "read":
         kind, payload = "read_content", {"url": url}
     elif operation == "draft":

@@ -98,8 +98,18 @@ class ActorStore:
         with self.connect() as db:
             rows = db.execute("SELECT id,platform,enabled,revision,config FROM actor_accounts WHERE actor_id=?",
                               (actor_id,)).fetchall()
-        return [{"id": row["id"], "platform": row["platform"], "enabled": bool(row["enabled"]),
-                 "actions": json.loads(row["config"]).get("actions", [])} for row in rows]
+        accounts = []
+        for row in rows:
+            config = json.loads(row["config"])
+            account = {"id": row["id"], "platform": row["platform"], "enabled": bool(row["enabled"]),
+                       "actions": config.get("actions", [])}
+            if row["platform"] == "bilibili" and config.get("adapter") == "broadcast":
+                account.update(adapter="broadcast", tool={"action": "broadcast"},
+                    instruction="原生 B站接口：用 action=broadcast operation=draft 保存草稿；不是网页 actions 权限。实际外发权限以 broadcast status 为准。")
+                # Older scheduled accounts carried an empty web-actions list.
+                account["actions"] = account["actions"] or ["status", "draft", "drafts", "draft_show"]
+            accounts.append(account)
+        return accounts
 
     def upsert_account(self, account_id, actor_id, platform, config, enabled=True):
         revision = digest([actor_id, platform, config, bool(enabled)])

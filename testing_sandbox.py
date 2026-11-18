@@ -118,7 +118,8 @@ def _copy_checkout(source, target):
         if path.is_file() and (path.suffix in {".py", ".md"} or path.name in
                 {"pytest.ini", "requirements.txt", "config.yaml.example", "pyproject.toml", "setup.cfg"}):
             shutil.copy2(path, target / path.name)
-    for name in ("agent_core", "console_tools", "skills", "master", "ui", "browser_extensions", "maintenance"):
+    for name in ("agent_core", "console_tools", "skills", "master", "ui", "browser_extensions", "maintenance",
+                 "emotion_studio/emotionlab"):
         if (source / name).is_dir():
             shutil.copytree(source / name, target / name, ignore=shutil.ignore_patterns(
                 "__pycache__", "*.pyc", "node_modules", ".git", "data", "*.sqlite3", "*.log"))

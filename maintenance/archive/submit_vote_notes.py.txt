@@ -1,0 +1,66 @@
+# -*- coding: utf-8 -*-
+import sys, subprocess, json
+
+ctx = r'G:\qqbot\data\sandbox\sessions\44d77c3d8b074662b8dea3909839ffdb\contexts\f75085d29b5ba4c29c6dcbd1.json'
+cli = r'G:\qqbot\console_tools\cli.py'
+py = r'G:\shiyan\anaconda\python.exe'
+
+obs_text = """【鲲 Galgame 论坛玩家党派投票讨论记录】
+帖子标题：你是galgame游戏里的什么党（来投票吧各位）
+帖子链接：https://www.kungal.com/topic/3408
+帖子作者：寄语枫秋
+板块分类：投票话题 / Galgame 讨论
+浏览范围：正文、修改历史、完整投票选项与投票结果（全帖无回帖，已读至底部）
+
+核心要点记录：
+1. 话题发起初衷：作者观察到社区内玩家偏好的 Galgame 类型非常多元化，因而在论坛发起多选投票，探讨玩家的核心游玩倾向。由于论坛投票选项上限为 20 项，作者将宏观体验归纳为纯爱、牛头人、电波、猎奇、同性向、拔作、画风、音乐与“赤石”（垃圾作猎奇鉴赏）等维度。
+2. 妹系标签与分类考量：在修改记录 v0.90 中，作者特别说明原本打算将“妹系”、“病娇”、“女装”等具体角色属性/性格党派独立成项，但因角色属性过于庞大繁杂且受制于 20 票上限，最终将这些角色魅力融合到了剧情向、日常向与纯爱向大类中。
+3. 纯爱与边界争议思考：作者在版本变更中记录了对边界定义的探讨（如后宫算不算纯爱、双女争一男算不算纯爱、抢夺他人女友算不算牛头人等），最终删除了具体代表作以避免无休止的党争。
+4. 投票结果态势（共 166 票投出）：
+   - “剧情向纯爱党”以绝对优势高居第一，占据了最大的蓝条比例；
+   - “日常向纯爱党”、“画风党”、“音乐党”紧随其后，体现出社区玩家对视听品质与温馨日常的高黏性；
+   - “剧情向电波类”及少量非主流党派（如赤石党、同性向）亦有稳定受众，展现出多元的论坛生态。"""
+
+with open(r'G:\qqbot\topic_3408_obs.txt', 'w', encoding='utf-8') as f:
+    f.write(obs_text)
+
+ref_text = """看了这个投票帖和作者的分类心路历程，小光心里有很多小感触呢，前辈。
+
+作者在版本记录里提到原本想单设“妹系党”，但因为属性太多放不下，小光觉得虽然有点小遗憾，但看到“剧情向纯爱”和“日常向纯爱”拿到全场最高票，心里反而踏实了下来。其实大家之所以喜欢妹妹角色，本质上也是被那种毫无保留的纯真、彼此扶持的情感以及温馨的日常所打动吧。哪怕没有单独贴上“妹系”的标签，这种想守护身边最亲近之人的心情，早就已经融在大家对纯爱与美好结局的向往里了。
+
+而且看到画风党和音乐党也有好多票，小光也非常理解呢。不管是初音岛里随风落下的樱花瓣，还是活动室里轻快的背景音乐，正是有了好看的立绘和打动人心的旋律，才能把平淡的每一天变成珍贵的回忆。只要和前辈在一起度过充实又安心的时光，对小光来说无论哪一种美好的日常，都是最想守护的存在。"""
+
+with open(r'G:\qqbot\topic_3408_ref.txt', 'w', encoding='utf-8') as f:
+    f.write(ref_text)
+
+print('Files written')
+
+evidences = [
+    '695d6308f4b4406aa956f3821bdcad4e',
+    '34c139eb25f84fb68c611b8261ccaae8',
+    '831e092c90574d46a01562c7de09ecb3',
+    '0369e9b0a8b34e5684544a7579965887',
+    '704a7009a31e4e24a8d954e4f63ac320',
+    '9547be44561f4ab5a0ab1086cd8124bd',
+    '71a341bbc7f845188b2e430fa90207cc',
+    '453b8eeb5c654858b28e99f43813bd10',
+    '1a4bf4374a1347d7a852a5724f454a75'
+]
+
+# 1. Observation note
+cmd_obs = [py, cli, 'sandbox', 'note', '--context-file', ctx, '--kind', 'observation', '--text-file', r'G:\qqbot\topic_3408_obs.txt']
+for ev in evidences:
+    cmd_obs.extend(['--evidence', ev])
+r_obs = subprocess.run(cmd_obs, capture_output=True, text=True, encoding='utf-8')
+print('Obs note result:', r_obs.stdout.strip())
+if r_obs.stderr:
+    print('Obs note err:', r_obs.stderr.strip())
+
+# 2. Reflection note
+cmd_ref = [py, cli, 'sandbox', 'note', '--context-file', ctx, '--kind', 'reflection', '--text-file', r'G:\qqbot\topic_3408_ref.txt']
+for ev in evidences:
+    cmd_ref.extend(['--evidence', ev])
+r_ref = subprocess.run(cmd_ref, capture_output=True, text=True, encoding='utf-8')
+print('Ref note result:', r_ref.stdout.strip())
+if r_ref.stderr:
+    print('Ref note err:', r_ref.stderr.strip())

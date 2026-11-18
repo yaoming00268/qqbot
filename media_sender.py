@@ -23,7 +23,7 @@ class MediaSender:
     def __init__(self, config: MediaConfig):
         self.config = config
 
-    async def send(self, ctx: MessageEnvelope, asset: MediaAsset, *, as_file=False, before_submit=None):
+    async def send(self, ctx: MessageEnvelope, asset: MediaAsset, *, as_file=False, before_submit=None, reply_to="", mention=""):
         ctx.check_current()
         # Use actual bytes on disk, even for stale/misreported asset metadata.
         # Reject before reconnect waits, publishing or gateway upload calls.
@@ -64,7 +64,10 @@ class MediaSender:
             else:
                 action = "send_group_msg" if ctx.is_group else "send_private_msg"
                 params = {"group_id" if ctx.is_group else "user_id": int(ctx.conversation_id),
-                          "message": [{"type": asset.kind, "data": {"file": path.as_uri() if gateway_path == str(path) else gateway_path}}]}
+                          "message": ([{"type": "reply", "data": {"id": reply_to}}] if reply_to else []) +
+                              ([{"type": "at", "data": {"qq": mention}}] if mention else []) +
+                              [{"type": "record" if asset.kind == "voice" else asset.kind,
+                                "data": {"file": path.as_uri() if gateway_path == str(path) else gateway_path}}]}
             result = await ctx.send_action(action, params, timeout=self.config.upload_timeout_seconds)
             check_onebot_response(action, result)
             data = result.get("data") or {}
@@ -85,7 +88,7 @@ class MediaSender:
             raise MediaError("当前官方通道未启用通用文件发送；请使用 OneBot 通道或配置文件发布服务。")
         remote = await self.public_asset(asset)
         ctx.check_current()
-        file_type = 4 if is_file else 2 if asset.kind == "video" else 1
+        file_type = 4 if is_file else 3 if asset.kind == "voice" else 2 if asset.kind == "video" else 1
         async with asyncio.timeout(self.config.upload_timeout_seconds):
             if ctx.is_group:
                 uploaded = await ctx.api.post_group_file(group_openid=ctx.conversation_id, file_type=file_type,
@@ -98,6 +101,10 @@ class MediaSender:
         ctx.check_current()
         kwargs = {"msg_type": 7, "media": {"file_info": uploaded["file_info"]},
                   "msg_id": ctx.message_id, "msg_seq": ctx.allocate_sequence()}
+        if reply_to:
+            kwargs["message_reference"] = {"message_id": reply_to, "ignore_get_message_error": True}
+        if mention:
+            kwargs["content"] = f"<@{mention}>"
         if before_submit:
             before_submit()
         try:

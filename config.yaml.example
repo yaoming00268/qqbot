@@ -2,6 +2,78 @@
 # QQ 官方开放平台机器人 + Antigravity Gemini 账号配额配置
 # ========================================================
 
+# 模型后端：默认 antigravity；deepseek_harness 使用官方 SDK 与独立持久会话。
+model_backend:
+  backend: antigravity
+deepseek_harness:
+  home: data/dsh
+  workspace: .
+  provider: deepseek-official
+  model: deepseek-v4-flash
+  base_url: ""
+  api_key_env: DEEPSEEK_API_KEY
+
+# 可选语音输出，先用 voice.bat setup 和 voice.bat studio-setup 安装，再从语音工作室开启。
+voice:
+  enabled: false
+  provider: voicestudio  # 也支持 gpt_sovits_v2 / gpt_sovits_inference
+  endpoint: http://127.0.0.1:9881
+  voicestudio:
+    source_directory: tools/voicestudio-upstream
+    backend_endpoint: http://127.0.0.1:9880
+    engine: gpt-sovits
+    local_bridge: true    # 连接完整 VoiceStudio 时设 false，endpoint 填其 HTTP 根地址
+    fallback_enabled: true
+    api_key_env: VOICESTUDIO_API_KEY
+  streaming: true
+  stream_chunk_ms: 80
+  crossfade_ms: 8
+  sample_steps: 16
+  reuse_models: true
+  reuse_audio: true
+  denoise:
+    enabled: true
+    reference: true
+    strength_db: 6
+    noise_floor_db: -50
+  default_language: ja    # ja / zh / en / mixed，日语在合成前完整假名化
+  character: atri
+  auto_start: false
+  engine_python: tools/voice-engine/.venv/Scripts/python.exe
+  engine_directory: tools/voice-engine/GPT-SoVITS-Inference
+  engine_config: tools/voice-engine/atri-infer.yaml
+  catalog_path: data/voice/catalog.json
+  cache_dir: data/cache/voice
+  ffmpeg_path: ffmpeg
+  dictionary:
+    ATRI: あとり
+    夏生: なつき
+  speed: 1.0
+  chunk_chars: 100
+  pause_ms: 120
+  max_duration_seconds: 120
+  # 可选角色训练，首次在控制台安装独立训练环境；不随 Bot 启动自动训练。
+  training:
+    version: v2ProPlus
+    batch_size: 2
+    sovits_epochs: 8
+    gpt_epochs: 10
+    asr_model: Systran/faster-whisper-small
+  # 模型独立安装，详见 SINGING_README.md
+  singing:
+    enabled: false
+    reuse_separation: true
+    denoise:
+      enabled: true
+      reference: true
+      strength_db: 6
+      noise_floor_db: -50
+    max_duration_seconds: 360
+    max_input_mb: 100
+    diffusion_steps: 30
+    generation_steps: 50
+    suspend_owned_tts: true
+
 # QQ 开放平台开发者凭据 (前往 https://q.qq.com/#/apps/bot 获取)
 qq:
   appid: ""          # 请填入您在 QQ 开放平台申请的机器人 AppID
@@ -53,6 +125,7 @@ antigravity:
 
 # 机器人交互行为
 bot:
+  conversations: {} # Studio「对话与代理」按账号配置独立人设、合并记忆或跟随主对话；默认保持独立
   bot_name: ""               # /botname /机器人名称（主人）
   reply_char_limit: 0          # /length /字数：普通聊天总字数；0 不限，命令全文与文件不截断
   admin_ids: []                # 管理员稳定 QQ/OpenID；官方通道使用此表，群管理员可在 group_settings 单独指定
@@ -110,6 +183,8 @@ media:
   image_generation_api_key_env: "QQBOT_IMAGE_GENERATION_KEY"
   image_generation_model: ""           # API 模式填写服务支持的模型
   gemini_web:
+    transport: "cookie"                # cookie 为原有模式；browser 启用独立浏览器页面
+    page_profile_dir: "data/gemini_web/page-profile"  # browser 模式专用登录资料目录
     model: "pro"                      # pro / flash / flash-lite / auto；也可填写账号支持的模型全名
     auto_browser: true                 # 自动复用已连接或可直接读取的浏览器登录态
     browser: "auto"                    # auto / chrome / edge / brave / firefox
@@ -180,3 +255,69 @@ sandbox:
   profiles: {}                # 只读资料目录别名，例如 {"游戏资料": "E:/资料/游戏"}；不填写密码
   browser_profiles: {}        # 专用 Chromium 登录目录，例如 {"视频账号": "E:/bot-browser/video"}；不填写密码
   browser_executable: ""      # 主人只给网址时使用；留空自动查找 Chrome/Edge，也可配置浏览器完整 exe 路径
+
+# 直播专用语音。与 voice（QQ 完整语音/SILK）分别保存，不隐式继承 QQ 参数
+broadcast_voice:
+  enabled: false
+  provider: "gpt_sovits_v2"
+  endpoint: "http://127.0.0.1:9882"
+  character: "atri"
+  default_language: "ja"
+  delivery_mode: "streaming"  # 即时 PCM；validated 先校验片段再播，不生成 SILK
+  auto_start: false
+  cache_dir: "data/cache/broadcast-voice"
+  catalog_path: "data/voice/catalog.json"  # 可共享训练权重与参考素材，播放管线独立
+  stream_chunk_ms: 40
+  max_ahead_seconds: 0.5
+  queue_blocks: 8
+  voicestudio:
+    backend_endpoint: "http://127.0.0.1:9882"  # 如启用 VoiceStudio，可将上层 endpoint 设为 9883
+
+# 透明Live2D浏览器画面；VTube Studio可选，OBS 28+内置WebSocket 5
+vtuber:
+  enabled: false
+  host: "127.0.0.1"
+  port: 18765
+  model_path: ""             # 本机 .model3.json；留空预览使用附带许可的官方示例
+  obs_url: "ws://127.0.0.1:4455"
+  obs_scene: "QQBot Live"
+  obs_source: "QQBot Live2D"
+  vts_url: "ws://127.0.0.1:8001"
+  width: 1280
+  height: 720
+
+# 独立本机运营服务。Cookie仅来自BILIBILI_*环境变量或私有JSON，不写在此处
+bilibili:
+  enabled: false
+  host: "127.0.0.1"
+  port: 18766
+  room_id: 0
+  area_id: 0
+  actor_id: ""               # 控制台“绑定当前角色”创建持续角色，可共享角色经历
+  auto_listen: false
+  auto_reply: false
+  batch_seconds: 3
+  batch_limit: 8
+  allow_publish: false        # 完成实际账号联调后，再允许显式外发
+  credentials_file: "data/broadcast/bilibili-credentials.json"
+  media_roots: ["data/broadcast/media", "data/voice", "data/singing", "artifacts"]
+  autonomy:
+    enabled: false             # 启动 Bot 核心后，按间隔唤醒绑定角色
+    actor_id: ""               # 控制台“绑定当前运营角色”设置，独立于弹幕角色
+    interval_minutes: 15
+    interests: []
+    goal: "阅读感兴趣的内容，形成自己的观点，认真回复相关讨论，记录选题并运营自己的账号。"
+    promotion_text: ""         # 账号介绍；结合内容自然提及，不重复刷广告
+    allow_comments: false
+    allow_likes: false
+    allow_dynamics: false
+    allow_video_uploads: false
+    allow_profile_update: false
+    max_actions_per_hour: 6
+    max_comments_per_day: 20
+    min_write_interval_seconds: 120
+    max_thread_replies: 2
+  livehime:
+    executable: ""             # 留空自动检测，或在控制台选择 livehime.exe
+    transport: "window"        # window / obs_virtual_camera
+    audio_device: ""           # 虚拟摄像头无音频，在直播姬另选音频设备

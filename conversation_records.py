@@ -40,19 +40,20 @@ def dialogue_records(records):
                        message.get("name") or ("机器人" if bot else "未知发言者"))
             identity = str(message.get("message_id") or message.get("id") or message.get("event_id") or row.get("message_id") or "")
             timestamp = message.get("timestamp", message.get("received_at", row.get("time")))
-            key = (identity, author, bot, content) if identity else (timestamp, author, bot, content)
+            source_scope = str(message.get("source_scope") or "")
+            key = (identity, author, bot, content, source_scope) if identity else (timestamp, author, bot, content, source_scope)
             if key in seen:
                 existing = seen[key]
                 if existing["author_name"] in ("未知发言者", "机器人"):
                     existing["author_name"] = name
-                for field in ("timestamp", "reply_to", "source_message_id", "delivery_state"):
+                for field in ("timestamp", "reply_to", "source_message_id", "delivery_state", "source_scope"):
                     if not existing.get(field) and message.get(field):
                         existing[field] = message[field]
                 continue
             normalized = {"message_id": identity, "author_id": author, "author_name": name,
                 "role": "assistant" if bot else "user" if author else "unknown", "is_bot": bot,
                 "timestamp": timestamp, "content": content,
-                **{key: message[key] for key in ("reply_to", "source_message_id", "delivery_state") if message.get(key)}}
+                **{key: message[key] for key in ("reply_to", "source_message_id", "delivery_state", "source_scope") if message.get(key)}}
             seen[key] = normalized
             result.append(normalized)
     return result

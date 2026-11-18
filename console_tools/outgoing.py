@@ -75,8 +75,9 @@ class OutgoingCommands:
     @staticmethod
     def _check_reply_budget(db, token, limit):
         if limit:
-            total = sum(len(json.loads(row[0])["text"]) for row in db.execute(
-                "SELECT payload FROM outgoing WHERE token=? AND state NOT IN ('failed','cancelled')", (token,)))
+            total = sum(max(len(item["text"]), len(item.get("spoken_text", ""))) for row in db.execute(
+                "SELECT payload FROM outgoing WHERE token=? AND state NOT IN ('failed','cancelled')", (token,))
+                        for item in [json.loads(row[0])])
             if total > limit:
                 raise ConsoleFileError("REPLY_LENGTH_EXCEEDED", f"普通回复合计 {total} 字，超过本轮 {limit} 字上限。",
                                        "缩短正文后重新提交；本次新增消息没有暂存或发送。完整命令结果通过 deliver 批准。")
@@ -143,11 +144,45 @@ class OutgoingCommands:
                     (context["namespace"], context["scope"], mention)).fetchone()):
                 raise ConsoleFileError("MENTION_TARGET_INVALID", "只能 @ 当前会话中已确认的成员，不能 @ 全体或机器人。")
 
-    def stage_message(self, token, text, reply_to="", mention="", request_key=""):
+    @staticmethod
+    def _voice_payload(context, voice, emotion, spoken_text, text=""):
+        if type(voice) is not bool:
+            raise ConsoleFileError("VOICE_INVALID", "voice 必须为 true 或 false。")
+        if not voice:
+            if emotion or spoken_text:
+                raise ConsoleFileError("VOICE_INVALID", "emotion 和 spoken_text 仅在 voice=true 时使用。")
+            return {}
+        settings = context.get("voice") or {}
+        if not settings.get("enabled"):
+            raise ConsoleFileError("VOICE_DISABLED", "控制台尚未启用语音输出。")
+        if not emotion or emotion not in settings.get("emotions", []):
+            raise ConsoleFileError("VOICE_EMOTION_INVALID", "语音必须选择真实可用的 emotion 标签。", "先用 voice 查询可用标签。")
+        if not isinstance(spoken_text, str) or len(spoken_text) > 16000:
+            raise ConsoleFileError("VOICE_TEXT_INVALID", "spoken_text 必须为不超过 16000 字的文字。")
+        from voice_text import inline_emotions, inline_prosody, VoiceError
+        try:
+            inline_emotions(spoken_text or text, emotion, settings.get("emotions", []))
+        except VoiceError as error:
+            raise ConsoleFileError("VOICE_EMOTION_INVALID", str(error), "使用 voice 查询可用标签；句中用 [emotion:标签] 切换。") from None
+        try:
+            inline_prosody(spoken_text or text)
+        except VoiceError as error:
+            raise ConsoleFileError("VOICE_PROSODY_INVALID", str(error), "语速标记需成对闭合且不可嵌套。") from None
+        return {"voice": True, "emotion": emotion, "spoken_text": spoken_text.strip()}
+
+    @staticmethod
+    def _platform_runs(messages):
+        # Every voice is one indivisible message. Adjacent text can still merge.
+        targets = [(item.get("reply_to", ""), item.get("mention", ""),
+                    index if item.get("voice") else -1) for index, item in enumerate(messages)]
+        return sum(index == 0 or target != targets[index - 1] for index, target in enumerate(targets))
+
+    def stage_message(self, token, text, reply_to="", mention="", request_key="", *, voice=False, emotion="", spoken_text=""):
         context = self._chat_context(token, allow_committed=True)
         text = self._message_text(text)
         self._message_targets(context, reply_to, mention)
-        payload = {"text": text, "reply_to": reply_to, "mention": mention}
+        payload = {"text": text, "reply_to": reply_to, "mention": mention,
+                   **self._voice_payload(context, voice, emotion, spoken_text, text)}
         encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         request_key = request_key or hashlib.sha256(encoded.encode()).hexdigest()
         with self.connect() as db:
@@ -156,10 +191,10 @@ class OutgoingCommands:
             self._require_speech_ready(db, token)
             existing = db.execute("SELECT id,state,payload FROM outgoing WHERE token=? AND request_key=?", (token, request_key)).fetchone()
             if not existing and context.get("transport") == "official":
-                targets = [(item["reply_to"], item["mention"]) for row in db.execute(
+                targets = [item for row in db.execute(
                     "SELECT payload FROM outgoing WHERE token=? AND state NOT IN ('failed','cancelled') ORDER BY created,rowid", (token,))
-                    for item in [json.loads(row[0])]] + [(reply_to, mention)]
-                runs = sum(index == 0 or target != targets[index - 1] for index, target in enumerate(targets))
+                    for item in [json.loads(row[0])]] + [payload]
+                runs = self._platform_runs(targets)
                 if runs > context.get("reply_slots", 5):
                     raise ConsoleFileError("MESSAGE_LIMIT", "本轮平台回复额度不足以发送更多不同目标的消息。",
                                            "相邻且引用/@相同的正文可合并；请在下一条新消息继续。")
@@ -171,14 +206,17 @@ class OutgoingCommands:
             raise ConsoleFileError("REQUEST_KEY_CONFLICT", "幂等键已用于另一条消息。")
         return {"id": row["id"], "state": row["state"]}
 
-    def reply(self, token, texts, reply_to="", mention="", request_key="", *, finish=False):
+    def reply(self, token, texts, reply_to="", mention="", request_key="", *, finish=False, voice=False, emotion="", spoken_text=""):
         """Commit a reply, optionally ending this turn in the same transaction."""
         context = self._chat_context(token, allow_closed=True)
         texts = [texts] if isinstance(texts, str) else texts
         if not isinstance(texts, list) or not texts or any(not isinstance(text, str) for text in texts):
             raise ConsoleFileError("MESSAGE_EMPTY", "reply 需要至少一条文字消息。")
+        voice_payload = self._voice_payload(context, voice, emotion, spoken_text, texts[0] if len(texts) == 1 else "")
+        if voice and len(texts) != 1:
+            raise ConsoleFileError("VOICE_TEXT_INVALID", "一条语音请使用单个 text；前端会切句合成完整语音。")
         messages = [{"text": self._message_text(text), "reply_to": reply_to if index == 0 else "",
-                     "mention": mention if index == 0 else ""} for index, text in enumerate(texts)]
+                     "mention": mention if index == 0 else "", **voice_payload} for index, text in enumerate(texts)]
         self._message_targets(context, reply_to, mention)
         key = self._commit_key("reply", [messages, request_key])
         with self.connect() as db:
@@ -199,10 +237,10 @@ class OutgoingCommands:
                 message_ids.append(identity)
             self._check_reply_budget(db, token, context.get("reply_char_limit", 0))
             if context.get("transport") == "official":
-                targets = [(item["reply_to"], item["mention"]) for row in db.execute(
+                targets = [item for row in db.execute(
                     "SELECT payload FROM outgoing WHERE token=? AND state NOT IN ('failed','cancelled') ORDER BY created,rowid", (token,))
                     for item in [json.loads(row[0])]]
-                runs = sum(index == 0 or target != targets[index - 1] for index, target in enumerate(targets))
+                runs = self._platform_runs(targets)
                 if runs > context.get("reply_slots", 5):
                     raise ConsoleFileError("MESSAGE_LIMIT", "本轮平台回复额度不足，整批回复未提交。")
             receipt = self._commit_turn(db, token, key, message_ids)

@@ -1,0 +1,2 @@
+# Optional account provider; fixed contract tested for this release.
+bilibili-api-python==17.4.2

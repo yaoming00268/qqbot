@@ -184,7 +184,7 @@ class SubagentRuntime:
             except PermissionError:
                 return "wait"
             mode = self.main.broker.reply_control(token).get("mode")
-            return "wait" if mode in ("wait", "sealed") else False
+            return "reported" if mode == "reported" else "wait" if mode in ("wait", "sealed") else False
         try:
             from antigravity_client import InvalidMediaError
             recovered = False

@@ -12,6 +12,8 @@ const esc = (value) =>
   );
 const clone = (value) => JSON.parse(JSON.stringify(value));
 const iconPaths = {
+  music: '<path d="M9 18V5l12-2v13M9 9l12-2"/><ellipse cx="6" cy="18" rx="3" ry="3"/><ellipse cx="18" cy="16" rx="3" ry="3"/>',
+  mic: '<rect x="8" y="2" width="8" height="13" rx="4"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/>',
   grid: '<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>',
   chat: '<path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8z"/><path d="M8 10h8m-8 4h5"/>',
   user: '<circle cx="12" cy="8" r="4"/><path d="M4 21v-2a7 7 0 0 1 7-7h2a7 7 0 0 1 7 7v2"/>',
@@ -63,11 +65,16 @@ function icons(root = document) {
 const pages = [
   ["overview", "概览", "grid"],
   ["messages", "对话监控", "chat"],
+  ["conversations", "对话与代理", "layers"],
   ["personas", "角色预设", "user"],
   ["memory", "记忆与通讯录", "book"],
   ["autonomy", "自主活动", "compass"],
   ["resources", "资源与任务", "folder"],
   ["emotion", "情感工作室", "heart"],
+  ["voice", "语音工作室", "mic"],
+  ["voice-training", "声音训练", "chart"],
+  ["singing", "唱歌工作室", "music"],
+  ["broadcast", "直播与运营", "globe"],
 ];
 const pageNames = Object.fromEntries([
   ...pages,
@@ -97,9 +104,20 @@ const S = {
   history: [],
   predictions: [],
   models: [],
+  voiceCatalog: null,
+  voiceText: "こんにちは。いっしょにほんをよみましょう。",
+  voiceEmotion: "neutral",
+  voicePreview: null,
+  voiceCheck: null,
+  singingRequest: {mode: "cover", song: "", lyrics: "", accompaniment: "", vocals_only: false, emotion: "neutral", language: "ja", style: "Expressive clear solo female singing, melodic and natural.", pitch_shift: 0, song_output: "file", seed: 42},
+  singingResult: null,
+  singingStatus: "",
+  dshCheck: "",
   invalid: new Set(),
   personaDraft: null,
   personaDirty: false,
+  conversationDraft: null,
+  conversationDirty: false,
   glossary: null,
   glossaryDirty: false,
 };
@@ -110,6 +128,85 @@ const accentColors = {
   slate: "#697a91",
 };
 const fieldNames = {
+  "broadcast_voice.enabled": "启用直播专用语音",
+  "broadcast_voice.provider": "直播合成接口",
+  "broadcast_voice.character": "直播角色声音",
+  "broadcast_voice.endpoint": "直播推理服务地址",
+  "broadcast_voice.delivery_mode": "直播播放模式",
+  "broadcast_voice.max_ahead_seconds": "播放器提前缓冲（秒）",
+  "broadcast_voice.queue_blocks": "音频队列块数",
+  "broadcast_voice.denoise.enabled": "直播参考音频降噪",
+  "vtuber.enabled": "启用虚拟主播",
+  "vtuber.model_path": "Live2D 模型路径",
+  "vtuber.width": "画面宽度",
+  "vtuber.height": "画面高度",
+  "vtuber.vts_url": "VTube Studio 连接地址",
+  "vtuber.obs_url": "OBS 连接地址",
+  "vtuber.obs_scene": "OBS 场景名称",
+  "vtuber.obs_source": "OBS 角色来源名称",
+  "bilibili.enabled": "启用 B 站运营",
+  "bilibili.room_id": "直播间号",
+  "bilibili.area_id": "直播分区 ID",
+  "bilibili.actor_id": "直播角色 ID",
+  "bilibili.auto_listen": "启动时连接弹幕",
+  "bilibili.auto_reply": "角色自主回复弹幕",
+  "bilibili.allow_publish": "允许实际发布与开关播",
+  streaming: "流式试听",
+  stream_chunk_ms: "流式音频块（毫秒）",
+  crossfade_ms: "句中切换淡化（毫秒）",
+  sample_steps: "语音采样步数",
+  reuse_models: "复用已加载的角色权重",
+  reuse_audio: "复用完整语音缓存",
+  reuse_separation: "复用已验证的歌曲分轨",
+  local_bridge: "使用本机 VoiceStudio 集成",
+  source_directory: "VoiceStudio 源码目录",
+  backend_endpoint: "原生 GPT-SoVITS 地址",
+  engine: "VoiceStudio 合成引擎",
+  fallback_enabled: "连接失败时使用原生接口",
+  "voice.denoise.enabled": "语音降噪",
+  "voice.singing.denoise.enabled": "歌声降噪",
+  reference: "清理参考音频底噪",
+  strength_db: "降噪强度（dB）",
+  noise_floor_db: "噪声基准（dB）",
+  "voice.singing.enabled": "允许主代理唱歌",
+  generation_python: "歌声生成 Python",
+  generation_directory: "歌声生成引擎目录",
+  max_input_mb: "歌曲输入上限（MB）",
+  max_lyrics_chars: "歌词字数上限",
+  diffusion_steps: "音色转换步数",
+  generation_steps: "歌声生成步数",
+  vocal_gain_db: "人声音量（dB）",
+  accompaniment_gain_db: "伴奏音量（dB）",
+  max_voice_seconds: "QQ 语音最长秒数",
+  suspend_owned_tts: "唱歌时临时释放本项目 TTS 显存",
+  "voice.provider": "合成接口",
+  "voice.character": "角色声音",
+  "deepseek_harness.provider": "模型服务商",
+  speed: "语速倍率",
+  model: "模型 ID",
+  max_tokens: "单次输出上限（0 沿用默认）",
+  base_url: "API 服务地址（可留空）",
+  initialize_timeout_seconds: "运行时启动时限（秒）",
+  model_aliases: "模型切换别名",
+  max_text_chars: "朗读字数上限",
+  ffmpeg_path: "ffmpeg 路径",
+  backend: "模型后端",
+  default_language: "语音语言",
+  character: "当前角色 ID",
+  catalog_path: "模型与情绪样本目录",
+  endpoint: "推理服务地址",
+  auto_start: "按需启动本地引擎",
+  engine_python: "语音环境 Python",
+  engine_directory: "推理引擎目录",
+  engine_config: "推理模型配置",
+  chunk_chars: "每句合成字数上限",
+  max_duration_seconds: "单条语音最长秒数",
+  pause_ms: "句间停顿（毫秒）",
+  dictionary: "日语专名读音词典",
+  home: "DSH 专用 Home",
+  workspace: "DSH 工作区",
+  api_key_env: "API Key 环境变量名",
+  reasoning_effort: "推理强度（可留空）",
   mode: "运行模式",
   bot_name: "机器人名称",
   master_id: "主人 QQ / OpenID",
@@ -199,6 +296,8 @@ const fieldNames = {
   search_provider: "搜索服务",
   search_api_url: "搜索 API 地址",
   gemini_web: "Gemini 网页连接",
+  transport: "连接方式",
+  page_profile_dir: "浏览器登录资料目录",
   image_generation_provider: "图片生成服务",
   image_generation_model: "图片生成模型",
   video_generation_provider: "视频生成服务",
@@ -245,6 +344,15 @@ const fieldNames = {
   delayed_quote_seconds: "延迟引用兼容项",
 };
 const enumNames = {
+  antigravity: "Antigravity",
+  deepseek_harness: "DeepSeek Harness（官方 SDK）",
+  gpt_sovits_v2: "GPT-SoVITS api_v2",
+  voicestudio: "VoiceStudio 流式服务",
+  gpt_sovits_inference: "GPT-SoVITS-Inference 角色情绪接口",
+  ja: "日语（完整假名）",
+  zh: "中文",
+  en: "英语",
+  mixed: "混合语言",
   official: "官方 QQ",
   onebot: "OneBot / NapCat",
   dual: "双通道",
@@ -260,6 +368,7 @@ const enumNames = {
   auto: "自动",
   disabled: "关闭",
   browser: "浏览器",
+  cookie: "Cookie 连接",
   desktop: "桌面",
   vm: "虚拟机",
 };
@@ -293,7 +402,7 @@ function dirty() {
   );
 }
 function hasEdits() {
-  return dirty() || S.personaDirty || S.datasetDirty || S.glossaryDirty;
+  return dirty() || S.conversationDirty || S.personaDirty || S.datasetDirty || S.glossaryDirty || Object.keys(S.voiceAnnotationEdits || {}).length > 0;
 }
 function markDirty() {
   $("#dirty-indicator").hidden = !hasEdits();
@@ -347,7 +456,7 @@ function head(title, subtitle, eyebrow, actions = "") {
   return `<div class="page-head"><div><div class="eyebrow">${esc(eyebrow)}</div><h1>${esc(title)}</h1><p>${esc(subtitle)}</p></div><div class="page-head-actions">${actions}</div></div>`;
 }
 function button(label, action, ic = "", cls = "", extra = "") {
-  return `<button class="button ${cls}" data-action="${action}" ${extra}>${ic ? icon(ic) : ""}${esc(label)}</button>`;
+  return `<button type="button" class="button ${cls}" data-action="${action}" ${extra}>${ic ? icon(ic) : ""}${esc(label)}</button>`;
 }
 function segmented(values, current, kind) {
   return `<div class="segmented">${values.map(([key, title]) => `<button data-${kind}="${key}" class="${current === key ? "active" : ""}">${esc(title)}</button>`).join("")}</div>`;
@@ -371,6 +480,7 @@ function field(path, options = {}) {
   const key = pathKeys(path).at(-1);
   const title =
     options.label ||
+    fieldNames[path] ||
     fieldNames[key] ||
     schema.description?.split(/[；。\n]/)[0] ||
     key;
@@ -383,12 +493,21 @@ function field(path, options = {}) {
   if (typeof value === "boolean") {
     return `<div class="toggle-row"><div><strong>${esc(title)}</strong>${description ? `<p>${esc(description)}</p>` : ""}</div><label class="switch"><input type="checkbox" data-config="${esc(path)}" aria-label="${esc(title)}"${checked(value)}><span></span></label></div>`;
   }
+  const voiceCharacters = path === "voice.character" ? S.voiceCatalog?.catalog?.characters
+    : path === "broadcast_voice.character" ? S.broadcastVoiceCatalog?.catalog?.characters : null;
+  const voiceChoices = voiceCharacters && Object.keys(voiceCharacters).length
+    ? [...new Set([...Object.keys(voiceCharacters), ...(value ? [value] : [])])]
+    : null;
+  const choiceNames = options.choiceNames || (path === "broadcast_voice.delivery_mode" ? {streaming:"即时流式 · 优先首音",validated:"先校验片段 · 优先完整性"} : voiceCharacters
+    ? Object.fromEntries(Object.entries(voiceCharacters).map(([id, character]) => [id, `${character.name || id} · ${id}`]))
+    : {});
   const enumValues =
     options.choices ||
+    voiceChoices ||
     schema.enum ||
     schema.anyOf?.find((item) => item.enum)?.enum;
   if (enumValues) {
-    control = `<select data-config="${esc(path)}" aria-label="${esc(title)}">${enumValues.map((v) => `<option value="${esc(v)}"${value === v ? " selected" : ""}>${esc(options.choiceNames?.[v] || enumNames[v] || v)}</option>`).join("")}</select>`;
+    control = `<select data-config="${esc(path)}" aria-label="${esc(title)}">${enumValues.map((v) => `<option value="${esc(v)}"${value === v ? " selected" : ""}>${esc(choiceNames[v] || enumNames[v] || v)}</option>`).join("")}</select>`;
   } else if (complex) {
     control = `<textarea class="json-field" data-config="${esc(path)}" data-type="json" spellcheck="false" aria-label="${esc(title)}">${esc(JSON.stringify(value, null, 2))}</textarea>`;
   } else if (options.multiline || key === "system_prompt") {
@@ -436,6 +555,8 @@ function applyAppearance(p) {
   document.body.classList.toggle("reduced-motion", p.reduced_motion);
 }
 function updateStatus() {
+  const voiceLabel = $("#voice-live-status");
+  if (voiceLabel) voiceLabel.textContent = voiceLiveLabel();
   const state = S.status.state,
     run = state === "running",
     stop = state === "stopping";
@@ -458,6 +579,7 @@ function updateStatus() {
 }
 async function navigate(page) {
   if (!pageNames[page]) return;
+  if (S.page === "voice" && page !== "voice") stopVoicePlayback();
   S.page = page;
   $$("[data-page]").forEach((el) =>
     el.classList.toggle("active", el.dataset.page === page),
@@ -465,18 +587,23 @@ async function navigate(page) {
   $("#breadcrumb").textContent = pageNames[page];
   render();
   $("#main-content").scrollTop = 0;
-  if (["overview", "resources", "memory", "autonomy"].includes(page))
+  if (["overview", "resources", "memory", "autonomy", "voice", "singing", "voice-training", "broadcast", "conversations"].includes(page))
     await loadRecords(page);
 }
 function render() {
   const renderers = {
     overview: overviewPage,
     messages: messagesPage,
+    conversations: conversationsPage,
     personas: personasPage,
     memory: memoryPage,
     autonomy: autonomyPage,
     resources: resourcesPage,
     emotion: emotionPage,
+    voice: voicePage,
+    "voice-training": voiceTrainingPage,
+    broadcast: broadcastPage,
+    singing: () => head("唱歌工作室", "给一首歌和歌词，让当前角色开口演唱。", "SINGING STUDIO", button("选择角色声音", "go-voice", "mic")) + singingPanel(),
     settings: settingsPage,
     appearance: appearancePage,
     logs: logsPage,
@@ -489,6 +616,7 @@ function render() {
 }
 async function loadRecords(page) {
   await attempt(async () => {
+    if (page === "conversations") S.conversations = await rpc("conversations", "list");
     if (["overview", "resources"].includes(page))
       S.records.tasks = await rpc("records", "tasks", "", 100);
     if (["overview", "memory"].includes(page))
@@ -499,6 +627,12 @@ async function loadRecords(page) {
       S.records.autonomy = await rpc("records", "autonomy", "", 100);
     if (page === "resources" && S.resourceTab === "stickers")
       S.records.stickers = await rpc("records", "stickers", "", 100);
+    if (["voice", "singing"].includes(page))
+      S.voiceCatalog = await rpc("voice", "catalog", { config: S.config.voice });
+    if (page === "voice-training") {
+      S.voiceTrainingInfo = await rpc("voice_training", "status", {config:S.config.voice});
+    }
+    if (page === "broadcast") await broadcastRefresh(false);
     if (S.page === page) render();
   });
 }
@@ -750,7 +884,17 @@ function activityHistory() {
   }${(r.errors || []).length ? info(esc(r.errors.join("；"))) : ""}</section>`;
 }
 function browserPanel() {
-  return `<section class="card mt"><div class="card-head"><div><h2>Gemini 网页连接</h2><small>连接常用浏览器，并检查账号实际可用的模型</small></div></div>${fields(["media.gemini_web.model", "media.gemini_web.browser", "media.gemini_web.browser_profile", "media.gemini_web.auto_browser"])}<div class="row mt wrap">${button("连接当前浏览器", "connect-browser", "globe")}${button("读取账号模型", "inspect-browser", "refresh")}${button("打开扩展目录", "open-extension", "folder", "ghost")}</div><p class="section-note" id="browser-status">${esc(S.browserStatus || "首次连接会打开本机连接页，在已登录 Gemini 的浏览器中完成。")}</p></section>`;
+  const pageMode = S.config.media.gemini_web.transport === "browser";
+  const browser = S.config.media.gemini_web.browser;
+  const choices = [...new Set(["auto", "chrome", "edge", browser])];
+  const modelHint = pageMode ? `<p class="section-note">浏览器页面模式支持 auto、flash、thinking 和 pro 模型。网页提供临时对话时会使用该功能，否则可能产生普通对话历史。</p>` : "";
+  const modeFields = pageMode
+    ? `<div class="form-grid">${field("media.gemini_web.browser", { choices })}${field("media.gemini_web.page_profile_dir")}</div>`
+    : fields(["media.gemini_web.browser", "media.gemini_web.browser_profile", "media.gemini_web.auto_browser"]);
+  const status = S.browserStatus || (pageMode
+    ? "请打开浏览器并手动登录 Gemini，关闭登录窗口后读取账号模型。关闭窗口会释放专用登录资料目录。支持自动选择、Chrome 和 Edge。"
+    : "首次连接会打开本机连接页，在已登录 Gemini 的浏览器中完成。");
+  return `<section class="card mt"><div class="card-head"><div><h2>Gemini 网页连接</h2><small>选择连接方式并检查账号可用模型</small></div></div>${fields(["media.gemini_web.transport", "media.gemini_web.model"])}${modeFields}${modelHint}<div class="row mt wrap">${button(pageMode ? "打开浏览器登录" : "连接当前浏览器", "connect-browser", "globe")}${button("读取账号模型", "inspect-browser", "refresh")}${pageMode ? "" : button("打开扩展目录", "open-extension", "folder", "ghost")}</div><p class="section-note" id="browser-status">${esc(status)}</p></section>`;
 }
 const stateNames = {
   running: "运行中",
@@ -897,6 +1041,15 @@ function settingsPage() {
     model: [
       "模型服务",
       [
+        "model_backend.backend",
+        "deepseek_harness.home",
+        "deepseek_harness.workspace",
+        "deepseek_harness.provider",
+        "deepseek_harness.model",
+        "deepseek_harness.reasoning_effort",
+        "deepseek_harness.max_tokens",
+        "deepseek_harness.base_url",
+        "deepseek_harness.api_key_env",
         "antigravity.default_model",
         "antigravity.timeout_seconds",
         "antigravity.session_timeout_minutes",
@@ -907,6 +1060,7 @@ function settingsPage() {
         "bot.system_prompt",
       ],
     ],
+    voice: ["语音输出", ["voice.enabled", "voice.provider", "voice.endpoint", "voice.default_language", "voice.character", "voice.auto_start"]],
     advanced: ["完整配置", []],
   };
   const [title, paths] = sections[S.settingTab];
@@ -947,9 +1101,127 @@ function settingsPage() {
               "保存时会校验参数，并保留当前未修改的配置字段",
               paths,
             )
-    }${S.settingTab === "queue" ? `<div class="mt">${info("积压达到阈值后，中断当前自然回复，将原问题与补充消息交给 AI 统一判断。已发送记录会传给下一轮，后台工作继续运行。设为 0 可关闭。")}</div>` : ""}<div class="mt">${info("凭据仅保存在本地。涉及连接方式或服务路径的更改，保存后重启 Bot 生效；普通行为设置沿用核心已有的重载机制。")}</div>`
+    }${S.settingTab === "model" ? `<section class="card mt"><div class="row wrap">${button("检查 DeepSeek Harness", "check-dsh", "refresh", "", S.status.task?.state === "running" ? "disabled" : "")}${button("导出官方 MCP 配置", "export-dsh", "download", "ghost")}</div><p class="section-note mt">${esc(S.dshCheck || "使用官方 SDK 自带运行时，主代理通过 QQBot MCP 工作；会话原地恢复，后端切换分别保留历史。检查不会发送模型请求。")}</p></section>` : ""}${S.settingTab === "voice" ? `<div class="mt">${button("打开语音工作室", "go-voice", "mic")}</div>` : ""}${S.settingTab === "queue" ? `<div class="mt">${info("积压达到阈值后，中断当前自然回复，将原问题与补充消息交给 AI 统一判断。已发送记录会传给下一轮，后台工作继续运行。设为 0 可关闭。")}</div>` : ""}<div class="mt">${info("凭据仅保存在本地。涉及连接方式或服务路径的更改，保存后重启 Bot 生效；普通行为设置沿用核心已有的重载机制。")}</div>`
   );
 }
+let voiceAudioContext = null, voiceAudioTail = 0, voiceAudioTask = "", voiceAudioNodes = new Set();
+function stopVoicePlayback() {
+  for (const source of voiceAudioNodes) { try { source.stop(); } catch {} }
+  voiceAudioNodes.clear();
+  voiceAudioTail = 0;
+  voiceAudioTask = "";
+}
+async function beginVoicePlayback() {
+  stopVoicePlayback();
+  if (!S.config.voice.streaming) return;
+  const Audio = window.AudioContext || window.webkitAudioContext;
+  if (!Audio) throw new Error("当前 WebView 不支持实时音频，请关闭流式试听后重试。");
+  voiceAudioContext ||= new Audio();
+  await voiceAudioContext.resume();
+}
+function playVoiceBlock(data) {
+  if (!voiceAudioContext || data.task_id !== voiceAudioTask || S.page !== "voice") return;
+  const raw = atob(data.pcm_base64);
+  const channels = data.channels, frames = raw.length / 2 / channels;
+  if (!Number.isInteger(frames) || frames <= 0) return;
+  const buffer = voiceAudioContext.createBuffer(channels, frames, data.sample_rate);
+  for (let channel = 0; channel < channels; channel++) {
+    const samples = buffer.getChannelData(channel);
+    for (let index = 0; index < frames; index++) {
+      const offset = (index * channels + channel) * 2;
+      let value = raw.charCodeAt(offset) | raw.charCodeAt(offset + 1) << 8;
+      if (value >= 32768) value -= 65536;
+      samples[index] = value / 32768;
+    }
+  }
+  const source = voiceAudioContext.createBufferSource();
+  source.buffer = buffer; source.connect(voiceAudioContext.destination);
+  voiceAudioNodes.add(source);
+  source.onended = () => voiceAudioNodes.delete(source);
+  const start = Math.max(voiceAudioContext.currentTime + .04, voiceAudioTail);
+  source.start(start); voiceAudioTail = start + buffer.duration;
+}
+function speechPage() {
+  const character = S.voiceCatalog?.catalog?.characters?.[S.config.voice.character];
+  const emotions = Object.entries(character?.emotions || {});
+  if (!emotions.some(([tag]) => tag === S.voiceEmotion)) S.voiceEmotion = emotions[0]?.[0] || "";
+  const busy = S.status.task?.state === "running";
+  const preview = S.voicePreview;
+  return head("语音工作室", "一句台词可以有多种心情，边生成边试听。", "VOICE STUDIO", button("重新载入样本", "reload-voice", "refresh")) +
+    `<div class="grid two">${formCard("声音与语言", "主代理按语境选择文字或语音，语音必须带情绪标签", ["voice.enabled", "voice.default_language", "voice.character", "voice.speed"])}<section class="card"><div class="card-head"><div><h2>试听台词</h2><small>仅在本机试听，最长 30 秒</small></div><span class="tag neutral">本地预览</span></div><div class="field full"><label for="voice-text">朗读台词</label><textarea id="voice-text" style="min-height:115px" placeholder="[emotion:neutral]こんにちは。[emotion:sad]少し寂しいね。[emotion:]でも大丈夫。">${esc(S.voiceText)}</textarea></div><div class="field mt"><label for="voice-emotion">默认情绪／要插入的标签</label><select id="voice-emotion">${emotions.map(([tag, ref]) => `<option value="${esc(tag)}"${tag === S.voiceEmotion ? " selected" : ""}>${esc(tag + (ref.description ? " · " + ref.description : ""))}</option>`).join("")}</select></div><div class="row wrap mt">${button("插入情绪标记", "insert-voice-emotion", "plus", "ghost")}${button("拖长音", "insert-voice-prosody", "plus", "ghost small", `data-prosody="stretch"`)}${button("快读", "insert-voice-prosody", "plus", "ghost small", `data-prosody="fast"`)}${button("慢读", "insert-voice-prosody", "plus", "ghost small", `data-prosody="slow"`)}${button("合成试听", "preview-voice", "play", "primary", busy || !emotions.length ? "disabled" : "")}${button("检查接口", "check-voice", "refresh", "", busy ? "disabled" : "")}${button("停止任务", "cancel-voice", "stop", "ghost", busy ? "" : "disabled")}</div><p class="section-note mt">模型按语境决定是否快读、慢读或拖长短词，无需逐次设置。选中文字后点击标记按钮即可试听：[fast]快读[/fast]、[slow]慢读[/slow]、[stretch]语气音[/stretch]。情绪可用 [emotion:标签] 切换，[emotion:] 恢复默认。标签不朗读，不额外插入停顿；QQ 在完整 SILK 编码后发送。</p><p id="voice-progress" class="section-note mt">${esc(S.voiceCheck || "")}</p>${preview ? `<div class="voice-preview mt"><audio controls preload="metadata" src="data:audio/wav;base64,${esc(preview.wav_base64)}"></audio><p class="section-note">${esc(preview.character)} · ${esc(preview.emotion)} · ${Number(preview.duration).toFixed(2)} 秒 · QQ SILK 已生成</p><details><summary class="section-note">查看分词与朗读文本</summary><pre class="voice-transcript">${esc(preview.chunks.map(c => c.language + " / " + c.emotion + " / " + (c.prosody || "normal") + " ×" + Number(c.speed || 1).toFixed(2) + ": " + c.text).join("\n"))}</pre><p class="section-note">${esc(preview.manifest_path)}</p><p class="section-note">${preview.cache_hit ? "完整音频缓存命中" : `首段 ${Number(preview.metrics?.first_audio_ms || 0).toFixed(0)} ms · 总耗时 ${Number(preview.metrics?.total_ms || 0).toFixed(0)} ms`}</p></details></div>` : ""}</section></div>` +
+    `<section class="card mt"><div class="card-head"><div><h2>角色与情绪参考</h2><small>${esc(character?.name || S.config.voice.character)} · 每个标签绑定一个真实切片</small></div><div class="row wrap">${button("编辑角色", "edit-voice-character", "edit", "small")}${button("添加角色", "add-voice-character", "plus", "small")}${button("添加情绪", "edit-voice-reference", "plus", "small", character ? "" : "disabled")}</div></div>${emotions.length ? `<div class="table-wrap"><table><thead><tr><th>情绪</th><th>参考文字</th><th>来源切片</th><th>操作</th></tr></thead><tbody>${emotions.map(([tag, ref]) => `<tr><td><strong>${esc(tag)}</strong><br><small>${esc(ref.description || "")}</small></td><td>${esc(ref.prompt_text || "由推理服务管理")}</td><td class="voice-path">${esc(ref.reference_audio || "服务端样本")}</td><td>${button("编辑", "edit-voice-reference", "edit", "small ghost", `data-emotion="${esc(tag)}"`)}${button("删除", "delete-voice-reference", "trash", "small ghost", `data-emotion="${esc(tag)}"`)}</td></tr>`).join("")}</tbody></table></div>` : empty("还没有情绪切片", "添加一个角色及其参考音频，或从角色接口同步标签。", "mic")}${character?.source ? `<p class="section-note mt">来源：${esc(character.source)}<br>${esc(character.attribution || "")} · ${esc(character.license || "")}</p>` : ""}${button("同步服务端角色情绪", "sync-voice-characters", "refresh", "ghost small", S.remoteVoiceCharacters ? "" : "disabled")}</section>` +
+    `<details class="card settings-group mt"><summary>本地引擎、切句与读音词典</summary>${fields(["voice.provider", "voice.endpoint", "voice.auto_start", "voice.streaming", "voice.stream_chunk_ms", "voice.crossfade_ms", "voice.sample_steps", "voice.reuse_models", "voice.reuse_audio", "voice.denoise.enabled", "voice.denoise.reference", "voice.denoise.strength_db", "voice.denoise.noise_floor_db", "voice.voicestudio.local_bridge", "voice.voicestudio.source_directory", "voice.voicestudio.backend_endpoint", "voice.voicestudio.engine", "voice.voicestudio.fallback_enabled", "voice.voicestudio.api_key_env", "voice.catalog_path", "voice.dictionary", "voice.chunk_chars", "voice.pause_ms", "voice.max_duration_seconds", "voice.max_text_chars", "voice.timeout_seconds", "voice.ffmpeg_path", "voice.engine_python", "voice.engine_directory", "voice.engine_config"])}<div class="row wrap mt">${button("启动本地引擎", "start-voice-engine", "play", "", busy ? "disabled" : "")}${button("停止本地引擎", "stop-voice-engine", "stop", "ghost", busy ? "disabled" : "")}</div></details><div class="mt">${info("日语台词会完整转为假名，专名可在词典中修正。混语可显式标记语言，纯汉字的日文请使用 [ja] 标记。ATRI 样板仅供非商业本地测试，请保留模型来源与署名。保存设置后，下一轮代理会获得新的语音选项。")}</div>`;
+}
+
+function voicePage() {
+  return `<section class="card"><div class="row wrap"><strong id="voice-live-status">${esc(voiceLiveLabel())}</strong>${button("应用语音设置到 Bot", "apply-voice-settings", "check", "primary small")}${button("训练专属声音", "go-voice-training", "chart", "small")}</div><p class="section-note mt">切换角色会立即保存并应用。其他语音设置编辑完成后点击应用；试听使用当前编辑值。</p></section><div class="mt">` + speechPage() + `</div><div class="mt">${button("打开唱歌工作室", "go-singing", "music")}</div>`;
+}
+
+const singingStages = {denoising: "清理人声底噪", queued: "等待推理资源", preparing: "检查歌曲和参考音频", separating: "分离人声与伴奏", generating: "根据歌词创作演唱", converting: "转换为角色声音", mixing: "混合歌声与伴奏", "encoding-voice": "转为 QQ 语音", ready: "演唱已完成"};
+function singingPanel() {
+  const r = S.singingRequest, busy = S.status.task?.state === "running";
+  const character = S.voiceCatalog?.catalog?.characters?.[S.config.voice.character];
+  const emotions = Object.keys(character?.emotions || {});
+  if (!emotions.includes(r.emotion)) r.emotion = emotions[0] || "neutral";
+  const options = (items, current) => items.map(([key, label]) => `<option value="${key}"${key === current ? " selected" : ""}>${label}</option>`).join("");
+  return `<section class="card mt" id="singing-studio"><div class="card-head"><div><h2>唱歌工作室</h2><small>选择歌曲，填入歌词，用当前角色的声音演唱</small></div><span class="tag neutral">本机生成</span></div>
+    <div class="grid two"><div>
+    <div class="field"><label for="sing-mode">输入类型</label><select id="sing-mode" data-sing-field="mode">${options([["cover", "原唱 / 导唱＋歌词"], ["compose", "伴奏＋歌词，创作演唱"]], r.mode)}</select></div>
+    <div class="field mt"><label for="sing-song">${r.mode === "cover" ? "原唱或导唱" : "纯伴奏"}</label><div class="row"><input id="sing-song" data-sing-field="song" value="${esc(r.song)}" placeholder="选择本机音频文件">${button("选择文件", "choose-sing-song", "folder", "small")}</div></div>
+    ${r.mode === "cover" ? `<label class="row mt"><input type="checkbox" data-sing-field="vocals_only"${r.vocals_only ? " checked" : ""}>输入已是纯人声，跳过分离</label><div class="field mt"><label for="sing-backing">独立伴奏（可选，须与导唱对齐）</label><div class="row"><input id="sing-backing" data-sing-field="accompaniment" value="${esc(r.accompaniment)}" placeholder="留空时从原唱分离">${button("选择", "choose-sing-backing", "folder", "small")}</div></div>` : `<div class="field mt"><label for="sing-style">唱法与风格</label><input id="sing-style" data-sing-field="style" value="${esc(r.style)}"></div>`}
+    <div class="form-grid mt"><div class="field"><label for="sing-language">歌词语言</label><select id="sing-language" data-sing-field="language">${options([["ja", "日语（生成前转假名）"], ["zh", "中文"], ["en", "英语"], ["unknown", "其他 / 混合"]], r.language)}</select></div><div class="field"><label for="sing-emotion">情绪参考</label><select id="sing-emotion" data-sing-field="emotion">${emotions.map(tag => `<option value="${esc(tag)}"${tag === r.emotion ? " selected" : ""}>${esc(tag)}</option>`).join("")}</select></div><div class="field"><label for="sing-pitch">移调（半音）</label><input id="sing-pitch" type="number" min="-12" max="12" data-sing-field="pitch_shift" value="${r.pitch_shift}"></div><div class="field"><label for="sing-output">输出形式</label><select id="sing-output" data-sing-field="song_output">${options([["file", "MP3 文件"], ["voice", "QQ 语音（SILK）"], ["both", "文件与语音"]], r.song_output)}</select></div></div>
+    </div><div><div class="field"><div class="row between"><label for="sing-lyrics">完整歌词</label>${button("载入 TXT / LRC", "choose-sing-lyrics", "file", "small ghost")}</div><textarea id="sing-lyrics" data-sing-field="lyrics" style="min-height:260px" placeholder="按行填写歌词，可保留 [Verse]、[Chorus] 等段落标记">${esc(r.lyrics)}</textarea></div><p class="section-note mt">${r.mode === "cover" ? "翻唱保留原唱发音与旋律，歌词用于留档；换词请使用伴奏创唱。" : "根据伴奏和歌词生成新的演唱旋律，不保证原曲唱法。日语生成歌词转为假名，原歌词另行保存。"}</p></div></div>
+    <div class="row wrap mt">${button("开始演唱", "render-singing", "play", "primary", busy || !emotions.length ? "disabled" : "")}${button("检查唱歌引擎", "check-singing", "refresh", "", busy ? "disabled" : "")}${button("停止任务", "cancel-singing", "stop", "ghost", busy ? "" : "disabled")}</div>
+    <p id="singing-status" class="section-note mt" role="status">${esc(S.singingStatus || "本页只生成本地试听，不发送 QQ。主代理的唱歌任务会在完成后提交成果，等待交付。")}</p>
+    ${S.singingResult ? `<div class="voice-preview mt"><audio controls preload="metadata" src="data:audio/mpeg;base64,${esc(S.singingResult.mp3_base64)}"></audio><p class="section-note">${esc(S.singingResult.character)} · ${Number(S.singingResult.duration).toFixed(1)} 秒${S.singingResult.silk_path ? " · QQ 语音已转码" : ""}</p><p class="section-note voice-path">${esc(S.singingResult.mp3_path)}</p>${button("打开成果目录", "open-singing-result", "folder", "small ghost")}</div>` : ""}
+    </section><details class="card settings-group mt"><summary>唱歌权限、混音与推理设置</summary>${fields(["voice.singing.enabled", "voice.singing.denoise.enabled", "voice.singing.denoise.reference", "voice.singing.denoise.strength_db", "voice.singing.denoise.noise_floor_db", "voice.singing.reuse_separation", "voice.singing.max_duration_seconds", "voice.singing.max_input_mb", "voice.singing.max_voice_seconds", "voice.singing.vocal_gain_db", "voice.singing.accompaniment_gain_db", "voice.singing.diffusion_steps", "voice.singing.generation_steps", "voice.singing.suspend_owned_tts", "voice.singing.engine_python", "voice.singing.engine_directory", "voice.singing.generation_python", "voice.singing.generation_directory", "voice.singing.timeout_seconds"])}</details>`;
+}
+
+async function saveVoiceCatalog(catalog) {
+  S.voiceCatalog = await rpc("voice", "save_catalog", { config: S.config.voice, catalog, revision: S.voiceCatalog?.revision || "" });
+  render();
+  toast("声音样本已保存。");
+}
+
+async function editVoiceCharacter(add = false) {
+  if (!S.voiceCatalog) await loadRecords("voice");
+  const original = add ? {} : S.voiceCatalog?.catalog?.characters?.[S.config.voice.character] || {};
+  const values = await modal(add ? "添加声音角色" : "编辑声音角色", "模型路径和参考切片须能被推理服务读取。", {
+    confirm: "保存角色",
+    fields: `<label class="dialog-field">角色 ID<input name="id" required value="${esc(add ? "" : S.config.voice.character)}" ${add ? "" : "readonly"}></label><label class="dialog-field">显示名称<input name="name" value="${esc(original.name || "")}"></label><label class="dialog-field">GPT 权重 .ckpt<input name="gpt_weights" value="${esc(original.gpt_weights || "")}"></label><label class="dialog-field">SoVITS 权重 .pth<input name="sovits_weights" value="${esc(original.sovits_weights || "")}"></label><label class="dialog-field">来源链接<input name="source" value="${esc(original.source || "")}"></label><label class="dialog-field">许可与用途<input name="license" value="${esc(original.license || "")}"></label><label class="dialog-field">作者署名<input name="attribution" value="${esc(original.attribution || "")}"></label>`
+  });
+  if (!values) return;
+  if (!/^[A-Za-z0-9_-]{1,80}$/.test(values.id) || ["__proto__", "constructor", "prototype"].includes(values.id)) throw new Error("角色 ID 请使用字母、数字、下划线或短横线。");
+  const catalog = clone(S.voiceCatalog.catalog);
+  if (add && catalog.characters[values.id]) throw new Error("角色 ID 已存在。");
+  const id = values.id;
+  delete values.id;
+  catalog.characters[id] = { ...original, ...values, emotions: original.emotions || {} };
+  await saveVoiceCatalog(catalog);
+  put("voice.character", id);
+  render();
+}
+
+async function editVoiceReference(el) {
+  if (!S.voiceCatalog) await loadRecords("voice");
+  const character = S.voiceCatalog.catalog.characters[S.config.voice.character];
+  if (!character) throw new Error("请先添加当前角色。");
+  const original = character.emotions[el.dataset.emotion] || {};
+  const values = await modal("情绪参考切片", "参考文字应与音频逐字对应。建议选用干净的 3 至 10 秒单人切片。", {
+    confirm: "保存切片",
+    fields: `<label class="dialog-field">情绪标签<select name="tag" data-voice-choice="emotions">${voiceChoiceOptions("emotions",el.dataset.emotion || "neutral")}</select><small class="voice-choice-description">${esc(voiceChoiceDescription("emotions",el.dataset.emotion || "neutral"))}</small></label><div class="form-grid"><label class="dialog-field">说话方式<select name="delivery" data-voice-choice="deliveries">${voiceChoiceOptions("deliveries",original.delivery || "normal")}</select><small class="voice-choice-description">${esc(voiceChoiceDescription("deliveries",original.delivery || "normal"))}</small></label><label class="dialog-field">情绪强度<select name="intensity" data-voice-choice="intensities">${voiceChoiceOptions("intensities",original.intensity || "medium")}</select><small class="voice-choice-description">${esc(voiceChoiceDescription("intensities",original.intensity || "medium"))}</small></label></div><label class="dialog-field">情绪说明<input name="description" value="${esc(original.description || "")}"></label><label class="dialog-field">参考 WAV 路径<div class="row"><input name="reference_audio" id="voice-reference-file" value="${esc(original.reference_audio || "")}">${button("选择", "choose-voice-reference", "folder", "small")}</div></label><label class="dialog-field">参考文字<textarea name="prompt_text">${esc(original.prompt_text || "")}</textarea></label><label class="dialog-field">参考语言<select name="prompt_language">${["ja", "zh", "en"].map(x => `<option value="${x}"${(original.prompt_language || "ja") === x ? " selected" : ""}>${enumNames[x]}</option>`).join("")}</select></label>`
+  });
+  if (!values) return;
+  if (!values.tag.trim() || ["__proto__", "constructor", "prototype"].includes(values.tag)) throw new Error("请填写有效情绪标签。");
+  const catalog = clone(S.voiceCatalog.catalog);
+  const refs = catalog.characters[S.config.voice.character].emotions;
+  if (el.dataset.emotion && el.dataset.emotion !== values.tag) delete refs[el.dataset.emotion];
+  const tag = values.tag;
+  delete values.tag;
+  refs[tag] = {...original, ...values};
+  await saveVoiceCatalog(catalog);
+}
+
 function appearancePage() {
   const p = S.preferences;
   const ranges = [
@@ -1223,6 +1495,8 @@ async function reload() {
     preferences: data.preferences,
     status: data.status,
     personaDraft: null,
+    conversationDraft: null,
+    conversationDirty: false,
     personaDirty: false,
     datasetDirty: false,
     glossary: null,
@@ -1238,16 +1512,19 @@ async function reload() {
     S.dataset = [];
   }
   render();
-  if (["overview", "memory", "autonomy", "resources"].includes(S.page))
+  if (["overview", "memory", "autonomy", "resources", "conversations"].includes(S.page))
     await loadRecords(S.page);
   updateStatus();
   toast("已重新载入配置与角色。");
 }
 async function saveAll() {
+  await voiceApplyChain.catch(() => {});
   await saveConfig();
+  if (S.conversationDirty) await conversationSave();
   if (S.personaDirty) await actions["save-persona"]();
   if (S.datasetDirty) await actions["save-dataset"]();
   if (S.glossaryDirty) await actions["save-glossary"]();
+  if (Object.keys(S.voiceAnnotationEdits || {}).length) await trainingSaveAnnotations();
   markDirty();
 }
 async function startModel(operation, params) {
@@ -1300,6 +1577,104 @@ async function requestClose() {
   updateStatus();
 }
 const actions = {
+  ...trainingActions,
+  ...broadcastActions,
+  "go-singing": () => navigate("singing"),
+  "choose-sing-song": async () => { const path = await rpc("choose_file", "open", ["Audio (*.wav;*.mp3;*.flac;*.m4a;*.ogg)", "All files (*.*)"]); if (path) { S.singingRequest.song = path; render(); } },
+  "choose-sing-backing": async () => { const path = await rpc("choose_file", "open", ["Audio (*.wav;*.mp3;*.flac;*.m4a;*.ogg)", "All files (*.*)"]); if (path) { S.singingRequest.accompaniment = path; render(); } },
+  "choose-sing-lyrics": async () => { const path = await rpc("choose_file", "open", ["Lyrics (*.txt;*.lrc)", "All files (*.*)"]); if (path) { S.singingRequest.lyrics = (await rpc("singing", "load_lyrics", {path, config: S.config.voice})).text; render(); } },
+  "render-singing": async () => {
+    if (!S.singingRequest.song || !S.singingRequest.lyrics.trim()) throw new Error("请选择歌曲并填写歌词。");
+    const request = {...S.singingRequest};
+    if (request.mode === "compose") { request.accompaniment = ""; request.vocals_only = false; }
+    S.singingResult = null;
+    const result = await rpc("singing", "render", {config: S.config.voice, request});
+    S.status.task = {...result, kind: "singing-render"}; S.singingStatus = "正在检查歌曲并准备演唱…"; render();
+  },
+  "check-singing": async () => { const result = await rpc("singing", "check", {config: S.config.voice}); S.status.task = {...result, kind: "singing-check"}; S.singingStatus = "正在检查两个推理环境…"; render(); },
+  "cancel-singing": async () => { await rpc("singing", "cancel"); S.singingStatus = "正在停止当前演唱并释放推理资源…"; render(); },
+  "open-singing-result": async () => { if (S.singingResult) await rpc("singing", "open_result", {directory: S.singingResult.directory, config: S.config.voice}); },
+  "go-voice": () => navigate("voice"),
+  "reload-voice": () => loadRecords("voice"),
+  "add-voice-character": () => editVoiceCharacter(true),
+  "edit-voice-character": () => editVoiceCharacter(false),
+  "edit-voice-reference": editVoiceReference,
+  "choose-voice-reference": async () => {
+    const path = await rpc("choose_file", "open", ["WAV audio (*.wav)", "All files (*.*)"]);
+    if (path && $("#voice-reference-file")) $("#voice-reference-file").value = path;
+  },
+  "delete-voice-reference": async el => {
+    if (!(await modal("删除情绪切片绑定", "删除标签 " + el.dataset.emotion + " 的绑定，原始音频保留。", { confirm: "删除绑定", danger: true }))) return;
+    const catalog = clone(S.voiceCatalog.catalog);
+    delete catalog.characters[S.config.voice.character].emotions[el.dataset.emotion];
+    await saveVoiceCatalog(catalog);
+  },
+  "sync-voice-characters": async () => {
+    const catalog = clone(S.voiceCatalog?.catalog || {version: 1, characters: {}});
+    for (const [name, tags] of Object.entries(S.remoteVoiceCharacters || {})) {
+      if (["__proto__", "constructor", "prototype"].includes(name) || !Array.isArray(tags)) continue;
+      const character = catalog.characters[name] || {name, emotions: {}};
+      for (const tag of tags) {
+        if (typeof tag !== "string" || ["__proto__", "constructor", "prototype"].includes(tag)) continue;
+        character.emotions[tag] ||= {description: "推理服务管理的参考切片"};
+      }
+      catalog.characters[name] = character;
+    }
+    await saveVoiceCatalog(catalog);
+  },
+  "preview-voice": async () => {
+    await beginVoicePlayback();
+    S.voiceText = $("#voice-text").value;
+    S.voiceEmotion = $("#voice-emotion").value;
+    const result = await rpc("voice", "preview", {config: S.config.voice, text: S.voiceText, emotion: S.voiceEmotion});
+    S.status.task = {...result, kind: "voice-preview"};
+    voiceAudioTask = result.id;
+    render();
+  },
+  "check-voice": async () => {
+    const result = await rpc("voice", "check", {config: S.config.voice});
+    S.status.task = {...result, kind: "voice-check"};
+    render();
+  },
+  "cancel-voice": async () => { stopVoicePlayback(); await rpc("voice", "cancel"); toast("正在停止语音任务。"); },
+  "insert-voice-emotion": () => {
+    const text = $("#voice-text"), tag = $("#voice-emotion").value;
+    const mark = `[emotion:${tag}]`;
+    text.setRangeText(mark, text.selectionStart, text.selectionEnd, "end");
+    S.voiceText = text.value; text.focus();
+  },
+  "insert-voice-prosody": (el) => {
+    const text = $("#voice-text"), tag = el.dataset.prosody;
+    if (!["fast", "slow", "stretch"].includes(tag)) return;
+    const start = text.selectionStart, selected = text.value.slice(start, text.selectionEnd);
+    const sample = S.config.voice.default_language === "ja" ? (tag === "stretch" ? "ねえ" : "いっしょにいこう。") : S.config.voice.default_language === "en" ? (tag === "stretch" ? "Oh" : "Let's go together.") : (tag === "stretch" ? "呀" : "我们一起出发吧。");
+    const body = selected || sample, prefix = `[${tag}]`;
+    text.setRangeText(`${prefix}${body}[/${tag}]`, start, text.selectionEnd, "end");
+    text.setSelectionRange(start + prefix.length, start + prefix.length + body.length);
+    S.voiceText = text.value; text.focus();
+  },
+  "start-voice-engine": async () => {
+    const result = await rpc("voice", "engine_start", {config: S.config.voice});
+    S.status.task = {...result, kind: "voice-engine"};
+    render();
+  },
+  "stop-voice-engine": async () => {
+    const result = await rpc("voice", "engine_stop");
+    S.status.task = {...result, kind: "voice-engine"};
+    render();
+  },
+  "check-dsh": async () => {
+    const result = await rpc("dsh", "check", {config: S.config.deepseek_harness});
+    S.status.task = {...result, kind: "dsh-check"};
+    S.dshCheck = "正在检查官方 SDK 与模型路由…";
+    render();
+  },
+  "export-dsh": async () => {
+    const result = await rpc("dsh", "export_mcp", {config: S.config.deepseek_harness});
+    S.dshCheck = "MCP 配置已导出：" + result.path;
+    render();
+    toast("官方 MCP 配置已导出。");
+  },
   "save-config": saveAll,
   reload,
   "save-glossary": async () => {
@@ -1317,12 +1692,19 @@ const actions = {
   "recover-restart": (el) => recoverActivity(el, "restart"),
   "connect-browser": async () => {
     await rpc("browser_tools", "connect", S.config.media.gemini_web);
-    S.browserStatus = "已打开本机连接页，完成连接后可读取账号模型。";
+    S.browserStatus = S.config.media.gemini_web.transport === "browser"
+      ? "已打开浏览器，请手动登录 Gemini，关闭该窗口以释放登录资料目录，然后读取账号模型。"
+      : "已打开本机连接页，完成连接后可读取账号模型。";
     render();
   },
   "inspect-browser": async () => {
-    await rpc("browser_tools", "inspect", S.config.media.gemini_web);
-    toast("正在读取账号可用模型。");
+    const transport = S.config.media.gemini_web.transport;
+    const task = await rpc("browser_tools", "inspect", S.config.media.gemini_web);
+    S.browserTask = { id: task.id, transport };
+    if (S.config.media.gemini_web.transport !== transport) return;
+    S.browserStatus = "正在读取账号可用模型。";
+    if ($("#browser-status")) $("#browser-status").textContent = S.browserStatus;
+    toast(S.browserStatus);
   },
   "open-extension": () => rpc("browser_tools", "extension"),
   "open-bert": () => rpc("browser_tools", "bert_studio"),
@@ -1356,6 +1738,11 @@ const actions = {
   "refresh-records": () => loadRecords(S.page),
   "go-messages": () => navigate("messages"),
   "go-personas": () => navigate("personas"),
+  "conversation-new": conversationNew,
+  "conversation-select": conversationSelect,
+  "conversation-save": () => conversationSave(),
+  "conversation-remove": () => conversationSave(true),
+  "conversation-refresh": () => loadRecords("conversations"),
   "go-appearance": () => navigate("appearance"),
   "new-persona": async () => {
     if (
@@ -1745,6 +2132,9 @@ document.addEventListener("input", (event) => {
   }
   markDirty();
   if (el.id === "analysis-text") S.analysisText = el.value;
+  if (el.id === "voice-text") S.voiceText = el.value;
+  if (el.id === "voice-emotion") S.voiceEmotion = el.value;
+  if (el.dataset.singField) S.singingRequest[el.dataset.singField] = el.type === "checkbox" ? el.checked : el.type === "number" ? Number(el.value) : el.value;
   if (el.id === "message-query" || el.id === "message-group") filterMessages();
   if (el.id === "log-query" || el.id === "log-level") {
     $("#log-terminal").innerHTML = logEntries();
@@ -1760,6 +2150,22 @@ document.addEventListener("input", (event) => {
   }
 });
 document.addEventListener("change", (event) => {
+  if (event.target.dataset.singField === "mode") render();
+  if (event.target.dataset.config === "media.gemini_web.transport") {
+    S.browserTask = null;
+    S.browserStatus = event.target.value === "browser"
+      ? "已切换到浏览器页面模式，请打开浏览器手动登录并保存配置。"
+      : "已切换到 Cookie 模式，请检查原有连接并保存配置。";
+    render();
+  }
+  if (event.target.dataset.config === "voice.character") {
+    stopVoicePlayback();
+    S.voicePreview = null;
+    S.voiceCheck = null;
+    const selectedCharacter = event.target.value;
+    attempt(() => applyVoiceSettings({character:selectedCharacter}));
+    if (["voice", "singing"].includes(S.page)) render();
+  }
   if (event.target.id === "log-level") {
     $("#log-terminal").innerHTML = logEntries();
     scrollLogs();
@@ -1786,13 +2192,25 @@ function filterMessages() {
     : empty("没有匹配的消息", "可以尝试其他关键词或群号。", "search");
 }
 function handleEvent(event) {
-  if (event.kind === "browser_connected") {
+  if (trainingEvent(event)) return;
+  if (event.kind === "voice_audio") { playVoiceBlock(event.data); return; }
+  if (event.kind === "browser_connected" && S.config.media.gemini_web.transport === "cookie") {
     S.browserStatus = "浏览器已连接：" + event.data.source;
     toast(S.browserStatus);
     if ($("#browser-status"))
       $("#browser-status").textContent = S.browserStatus;
   }
   if (event.kind === "model_progress") {
+    if (event.data.type === "stage" && S.status.task?.kind === "voice-preview") {
+      const data = event.data;
+      S.voiceCheck = ({starting: "正在准备语音服务", retrying: "片段异常短，正在重新合成完整台词", encoding: "正在编码 QQ 语音", ready: "台词已合成", "cache-hit": "已复用完整语音缓存"})[data.stage] || `正在合成 ${Number(data.index) + 1}/${data.count} · ${data.emotion}`;
+      if ($("#voice-progress")) $("#voice-progress").textContent = S.voiceCheck;
+      if (data.stage === "synthesizing" && voiceAudioContext && data.pause_before_ms && voiceAudioTail) voiceAudioTail += data.pause_before_ms / 1000;
+    }
+    if (event.data.stage) {
+      S.singingStatus = (singingStages[event.data.stage] || event.data.stage) + (event.data.message ? " · " + event.data.message : "");
+      if ($("#singing-status")) $("#singing-status").textContent = S.singingStatus;
+    }
     if (event.data.type === "epoch") {
       S.history.push(event.data);
       if ($("#training-chart"))
@@ -1803,12 +2221,55 @@ function handleEvent(event) {
   }
   if (event.kind === "model_result") {
     const data = event.data;
+    if (data.kind === "gemini" && (S.browserTask?.id !== data.id || S.browserTask?.transport !== S.config.media.gemini_web.transport)) return;
     if (data.state === "failed") {
+      if (data.kind === "voice-preview") stopVoicePlayback();
       toast(data.error, "error");
-      if (S.page === "emotion") render();
+      if (data.kind === "gemini") {
+        S.browserStatus = data.error;
+        if ($("#browser-status")) $("#browser-status").textContent = S.browserStatus;
+      }
+      if (data.kind === "dsh-check") S.dshCheck = data.error;
+      if (data.kind?.startsWith("voice-")) S.voiceCheck = data.error;
+      if (data.kind?.startsWith("singing-")) S.singingStatus = data.error;
+      if (["emotion", "voice", "singing", "settings"].includes(S.page)) render();
       return;
     }
+    if (data.kind === "singing-render") {
+      if (data.state === "completed") S.singingResult = data.result;
+      S.singingStatus = data.state === "cancelled" ? "演唱已停止，任务文件已保留。" : "演唱已完成，可在本机试听。";
+      if (["voice", "singing"].includes(S.page)) render();
+    }
+    if (data.kind === "singing-check") {
+      const result = data.result || {};
+      S.singingStatus = result.healthy ? "原唱翻唱与伴奏创唱引擎均可用。" : JSON.stringify({翻唱: result.conversion, 创唱: result.generation});
+      if (["voice", "singing"].includes(S.page)) render();
+    }
+    if (data.kind === "voice-preview") {
+      if (data.state === "completed") S.voicePreview = data.result;
+      if (["voice", "singing"].includes(S.page)) render();
+      toast(data.state === "cancelled" ? "语音任务已停止。" : "语音已合成并完成 SILK 转码。");
+    }
+    if (data.kind === "voice-check") {
+      S.voiceCheck = data.result?.reachable ? "接口可用，角色与情绪已核对。" : "接口检查未完成。";
+      S.remoteVoiceCharacters = data.result?.server_characters;
+      if (["voice", "singing"].includes(S.page)) render();
+    }
+    if (data.kind === "voice-engine") {
+      S.voiceCheck = data.result?.running ? "本地引擎已就绪。" : "本地引擎已停止，或当前服务由其他进程管理。";
+      if (["voice", "singing"].includes(S.page)) render();
+    }
+    if (data.kind === "dsh-check") {
+      S.dshCheck = data.result?.message || "运行时检查结束。";
+      if (!data.result?.api_key_present) S.dshCheck += " API Key 环境变量未设置；可在专用 DSH Home 中配置账户。";
+      if (S.page === "settings") render();
+    }
     if (data.kind === "gemini") {
+      if (data.state !== "completed") {
+        S.browserStatus = "账号模型检查已停止。";
+        if ($("#browser-status")) $("#browser-status").textContent = S.browserStatus;
+        return;
+      }
       S.browserStatus =
         "登录有效；可用模型：" +
         ((data.result?.models || [])
@@ -1923,11 +2384,13 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
     attempt(() => saveAppearance({}, false));
 });
 window.studio = {
+  version: "20261117-speech-settings",
   get ready() {
     return S.ready;
   },
   requestClose,
-  smoke() {
+  async smoke() {
+    await loadRecords("voice");
     const views = [];
     for (const [key] of [...pages, ["appearance"], ["settings"], ["logs"]]) {
       S.page = key;
@@ -1936,19 +2399,29 @@ window.studio = {
         page: key,
         heading: $("#main-content h1")?.textContent,
         rendered: Boolean($("#main-content h1")),
+        overflow: document.documentElement.scrollWidth > innerWidth || $("#main-content").scrollWidth > $("#main-content").clientWidth + 1,
       });
+    }
+    for (const tab of ["model", "voice"]) {
+      S.page = "settings";
+      S.settingTab = tab;
+      render();
+      views.push({page: "settings-" + tab, heading: $("#main-content h1")?.textContent,
+        rendered: Boolean($("#main-content h1")),
+        overflow: document.documentElement.scrollWidth > innerWidth || $("#main-content").scrollWidth > $("#main-content").clientWidth + 1});
     }
     S.page = "overview";
     render();
     return {
-      ok: views.every((r) => r.rendered),
+      ok: views.every((r) => r.rendered && !r.overflow),
       pages: views,
       preferences: S.preferences,
+      version: window.studio.version,
       bridge: S.ready,
       emoji_free: !/[\p{Extended_Pictographic}]/u.test(
         $("#navigation").textContent,
       ),
-      overflow: document.documentElement.scrollWidth > innerWidth,
+      overflow: views.some((r) => r.overflow),
     };
   },
 };

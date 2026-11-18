@@ -17,6 +17,7 @@ if hasattr(sys.stderr, "reconfigure"):
 
 from config import AppConfig
 from antigravity_client import AntigravityClient
+from model_backend import create_ai_client
 from persona_manager import PersonaManager
 
 
@@ -79,13 +80,14 @@ def check_configuration(config: AppConfig) -> bool:
 
 async def diagnose_antigravity(ai_client: AntigravityClient) -> bool:
     """自检 Antigravity 服务与 Google 账号 Gemini 配额"""
-    logger.info("🔍 正在自检 Antigravity Language Server 及 Google 账号配额...")
+    backend = "DeepSeek Harness" if type(ai_client).__name__ == "DeepSeekHarnessClient" else "Antigravity"
+    logger.info("正在自检 %s 模型服务...", backend)
     ok, msg = await ai_client.probe(timeout=15.0)
     if not ok:
-        logger.error(f"❌ Antigravity 配额自检失败: {msg}")
+        logger.error("%s 服务自检失败: %s", backend, msg)
         return False
 
-    logger.info(f"✅ Antigravity Gemini 配额自检成功！探针响应: {msg}")
+    logger.info("%s 服务自检成功: %s", backend, msg)
     return True
 
 
@@ -107,16 +109,7 @@ def main():
         return
 
     # 2. 初始化 Antigravity 客户端并进行配额自检
-    ai_client = AntigravityClient(
-        default_model=config.antigravity.default_model,
-        ls_address=config.antigravity.ls_address,
-        csrf_token=config.antigravity.csrf_token,
-        project_id=config.antigravity.project_id,
-        language_server_path=config.antigravity.language_server_path,
-        timeout_seconds=config.antigravity.timeout_seconds,
-        session_timeout_minutes=config.antigravity.session_timeout_minutes,
-        system_prompt=config.bot.system_prompt
-    )
+    ai_client = create_ai_client(config)
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -185,6 +178,8 @@ def main():
                 loop.run_until_complete(ob.graceful_stop())
             except Exception as ge:
                 logger.warning(f"OneBot 关闭清理异常: {ge}")
+            if hasattr(ai_client, "aclose"):
+                loop.run_until_complete(ai_client.aclose())
         return
 
     # 4. 检查 QQ 官方开放平台凭据 (官方或双通道模式需要)
@@ -213,8 +208,7 @@ def main():
             asyncio.set_event_loop(ob_loop)
             # Each event loop owns its AI locks, session file, and persona state.
             ob_config = config.model_copy(deep=True)
-            ob_ai = AntigravityClient(
-                **ob_config.antigravity.model_dump(),
+            ob_ai = create_ai_client(ob_config,
                 system_prompt=ai_client.system_prompt,
                 sessions_file="data/onebot_sessions.json",
             )
@@ -239,6 +233,8 @@ def main():
                     ob_loop.run_until_complete(ob_client.graceful_stop())
                 except Exception as ge:
                     logger.warning(f"[OneBot] 退出整理群记忆异常: {ge}")
+                if hasattr(ob_ai, "aclose"):
+                    ob_loop.run_until_complete(ob_ai.aclose())
                 try:
                     ob_loop.close()
                 except Exception:
@@ -297,6 +293,8 @@ def main():
             ob_thread_box[0].join(timeout=15.0)
             if ob_thread_box[0].is_alive():
                 logger.warning("⚠️ OneBot 后台线程停机超时 (15s)，进程继续退出。")
+        if hasattr(ai_client, "aclose"):
+            loop.run_until_complete(ai_client.aclose())
 
 
 if __name__ == "__main__":

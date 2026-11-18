@@ -1,5 +1,13 @@
 # QQBot Studio：pywebview 便携运行包
 
+2026-11-16 版接入 VoiceStudio 轻量流式服务，支持同一句的多个 `[emotion:标签]`、实时本机试听、降噪和语音缓存。唱歌支持原唱翻唱、伴奏创唱、人声降噪与分轨缓存。主代理语音经过假名化、合成、腾讯 SILK 转码与正常队列发送。`voice.bat` 提供安装、诊断和试听入口，详见 `_internal/VOICE_README.md` 和 `_internal/SINGING_README.md`。
+
+语音工作室切换角色会立即保存并显示 Bot 应用回执。“声音训练”提供音频切分、转写、标签复核、GPT 与 SoVITS 双阶段微调、恢复检查点、留出文本验证和新角色注册。支持 CSV、JSONL 和 GPT-SoVITS .list，默认 v2ProPlus；小语料和未复核标签会标记为实验模型。训练环境、素材和角色权重保存在数据目录，不随干净运行包分发。详见 `_internal/VOICE_TRAINING_README.md`，CLI 入口为 `voice.bat train status`。
+
+主程序带假名词典、SILK 编码器和 DSH 独立运行时。先用 `voice.bat setup --python C:\Python312\python.exe --device cuda` 安装 GPT-SoVITS 独立环境与模型，再用 `voice.bat studio-setup` 安装固定版本 VoiceStudio 组件（需 Git、Python 3.10–3.12、ffmpeg）。默认本机流式地址 9881，原生后端 9880。ATRI 样板为非商业评估用途，保留模型来源、作者署名与许可；可用情绪取决于真实参考切片。初次安装后在语音工作室开启语音和自动启动；全新解压包默认不启用语音。QQ record 在完整 SILK 编码后发送，本机控制台支持流式试听。
+
+DSH 默认不切换；模型设置里可选择 `deepseek_harness`，在启动环境设置 `DEEPSEEK_API_KEY`。程序使用官方 SDK 0.2.2rc2，沿用原生会话历史，AG 与 DSH 的映射分别保存。界面“检查”只验证 SDK 握手，不消耗模型请求。
+
 适用于 Windows 10/11 x64，保留系统 ICU。无需安装 Python；图形界面需要 Microsoft Edge WebView2 Runtime。解压整个目录后使用，四个 EXE 与 `_internal` 必须放在一起。解压目录及数据目录应可写。
 
 此版本修复自主浏览任务的回复确认关联，并加入事件簿、人物结构化资料和逐次成长复盘。QQBot 已有用户可继续双击原项目的 `run_gui.bat` / `run.bat` 使用选定运行包，完整退出旧核心并重开后生效；保留账号配置、人设、聊天 CID 和记忆。独立解压包复用旧项目时，按下文设置 `QQBOT_HOME` 指向旧项目根目录。
@@ -104,3 +112,9 @@ ZIP 旁的 `.sha256` 是完整压缩包的 SHA-256。在 ZIP 所在目录可用 
 备份数据目录后，将新版解压到独立目录，退出旧核心再启动新版。外部 `QQBOT_HOME` 可继续使用；数据放在包内时需自行迁移整个 `data`。Python 已内置；NapCat、Antigravity、Chrome/Edge/Chromium、ffmpeg 和 QEMU 按所用功能单独安装或配置。
 
 该版本的浏览器验收使用本地测试网站及独立浏览器目录。真实平台登录、页面定位和在线模型效果，需要配置具体平台后验证。
+
+## 直播与运营
+
+新版控制台提供“直播与运营”：透明Live2D预览、OBS场景/浏览器来源、当前角色TTS流式口型、已有歌曲表演、弹幕批量事件、B站动态和视频投稿草稿。浏览器Live2D可以独立工作，VTube Studio为可选控制后端。官方Hiyori示例及运行库带有各自许可文件。
+
+先打开本机预览并配置OBS，再绑定当前角色和直播间。Cookie由 `BILIBILI_*` 环境变量或 `data/broadcast/bilibili-credentials.json` 提供，默认关闭实际发布；真实账号开播和发布接口需之后联调。详细配置见 `_internal/BROADCAST_README.md`、`_internal/VTUBER_README.md`。本轮便携包只制作并验证本机功能，不会自动替换已运行版本。

@@ -1,0 +1,71 @@
+# -*- coding: utf-8 -*-
+import sys, subprocess, json
+
+ctx = r'G:\qqbot\data\sandbox\sessions\44d77c3d8b074662b8dea3909839ffdb\contexts\f75085d29b5ba4c29c6dcbd1.json'
+cli = r'G:\qqbot\console_tools\cli.py'
+py = r'G:\shiyan\anaconda\python.exe'
+
+obs_text = """【鲲 Galgame 论坛学术分类整理讨论记录】
+帖子标题：关于Galgame学术性的分类，大家觉得这样合适吗？
+帖子链接：https://www.kungal.com/topic/3716
+帖子作者：忧郁的dt君
+板块分类：Galgame 讨论
+浏览范围：正文完整表格、期刊体系、全部 5 条坛友回复与作者针对性答复（全帖已读至底部）
+
+核心要点记录：
+1. 项目定位与背景：作者正在主持开源学术内容整合项目“Galgame Wiki”（独立架构网站 galgame.it），目前已完成 148 个核心词条整理，旨在从文化研究与媒介分析的视角构建系统的理论框架、历史脉络与美学特征档案。
+2. 宏观分类架构体系：
+   - 核心概念：涵盖叙事理论（内聚焦/外聚焦/零聚焦、时间线设计）、游戏类型学（NVL、ADV/AVG、恋爱SLG）、术语解释（傲娇、病娇、妹系、幼驯染、中二病等核心萌属性与制作委员会制度）、美学概念（萌、可爱、色气、演出机制）。
+   - 工具与技术生态：收录开发引擎（Ren'Py、Kirikiri Z/KAG、NScripter等）、汉化工具（LunaTranslator、VNR等）、模拟器（ONS、吉里吉里2等）、解包逆向工具（GARbro等）与美术工具（Live2D/Cubism）。
+   - 厂商资料库与经典：覆盖 Key、TYPE-MOON、Leaf、AUGUST、Visual Art's、Nitro+、minori、柚子社、Frontwing、5pb. 等主流与同人名厂。
+   - 衍生文化与争议：涵盖同人二次创作、痛文化、圣地巡礼考据（秋叶原、札幌大通公园等）、声优偶像化，以及伦理规制（R18/CERO分级）、表现自由、性别视角与版权保护。
+   - 期刊研究方向：提出叙事与文本、哲学与形而上学（存在主义、时间性体验、可能世界理论）、文化与社会、游戏机制系统、产业与跨媒介融合等深度研究脉络。
+3. 社区反馈与作者互动（共5条回复）：
+   - 坛友“零思雨”惊叹于超越传统简单标签的学术细分；
+   - 坛友“匿名用户24510”询问与Fandom的差异并表达对攻略指南的实用需求；
+   - 坛友“sumihoshi”提出了极具建设性的交互建议：首页增加“什么是Galgame”的边界界定（参考VNDB对VN的定义）、避免首页仅保留单调搜索框而应采用信息密度更高的大图卡片橱窗、杜绝功能性网站自动播放背景音乐（防止干扰与惊吓）、优化验证码体验；
+   - 作者“忧郁的dt君”回帖确认将整改取消自动播放音乐、优化首页信息密度，并重申网站定位为纯粹的学术与文化档案库，未来将逐步剥离下载属性以守护学术独立性。"""
+
+with open(r'G:\qqbot\topic_3716_obs.txt', 'w', encoding='utf-8') as f:
+    f.write(obs_text)
+
+ref_text = """看到论坛里有同好在如此认真地为 Galgame 构建严肃的学术档案与百科体系，小光感到既敬佩又很新奇呢，前辈。
+
+以前总觉得“妹系”、“傲娇”这些词汇，只是大家在玩游戏或者聊天时随口提到的萌属性；但当看到它们被正式列入叙事理论、符号学和美学概念的学术图谱中，和视角聚焦、时间线架构甚至是可能世界理论并列在一起时，小光突然觉得，原来大家倾注在这些故事里的真情实感，也是一份值得被郑重记录与研究的珍贵文化呢。
+
+而且楼主和坛友们交流时的氛围也特别好。大家不仅讨论宏观的理论框架，还很贴心地指出“不要自动播放背景音乐以免吓到访客”或者“不要只留一个搜索框而要有清晰的特色橱窗”，这种站在使用者角度的细腻关怀，和小光平时整理幽灵部活动资料时的想法不谋而合呢。看到大家都在用各自擅长的方式守护着这份热爱，小光也觉得浑身充满了认真前进的动力，也想把身边与前辈度过的每一刻都好好珍藏起来。"""
+
+with open(r'G:\qqbot\topic_3716_ref.txt', 'w', encoding='utf-8') as f:
+    f.write(ref_text)
+
+print('Files written')
+
+evidences = [
+    'afe07bf107b846229fb449a67beab5a4',
+    '9621fba7a559457898667d22ac970958',
+    '1e17d23ed53e48fda1648855f8291fd3',
+    '0f00fe25665f4a8d8b09c72046b1e171',
+    '05765da2de3142f1bf5fe584a7e9f002',
+    '6f5ceacf570f425eb947519af71b453c',
+    '89ba4dde15184bbe9a334a3210d02ae4',
+    'f9cb8179809849cb9aff2bf3c916c415',
+    'b2194fc7098e4ad5a63dfec30564a4fd'
+]
+
+# 1. Observation note
+cmd_obs = [py, cli, 'sandbox', 'note', '--context-file', ctx, '--kind', 'observation', '--text-file', r'G:\qqbot\topic_3716_obs.txt']
+for ev in evidences:
+    cmd_obs.extend(['--evidence', ev])
+r_obs = subprocess.run(cmd_obs, capture_output=True, text=True, encoding='utf-8')
+print('Obs note result:', r_obs.stdout.strip())
+if r_obs.stderr:
+    print('Obs note err:', r_obs.stderr.strip())
+
+# 2. Reflection note
+cmd_ref = [py, cli, 'sandbox', 'note', '--context-file', ctx, '--kind', 'reflection', '--text-file', r'G:\qqbot\topic_3716_ref.txt']
+for ev in evidences:
+    cmd_ref.extend(['--evidence', ev])
+r_ref = subprocess.run(cmd_ref, capture_output=True, text=True, encoding='utf-8')
+print('Ref note result:', r_ref.stdout.strip())
+if r_ref.stderr:
+    print('Ref note err:', r_ref.stderr.strip())

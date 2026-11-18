@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -26,13 +27,15 @@ def desktop_schemas():
     return result
 
 
-def tools_schema():
+def _all_tools_schema():
     definitions = [{"name": "qqbot_reply", "description": "立即发送台词并结束本轮。需要继续工具时 continue_work=true；完成后用 CLI finish。固定规范见已加载 MAIN.md。",
         "inputSchema": {"type": "object", "properties": {
             "context_file": {"type": "string"}, "text": {"oneOf": [{"type": "string", "minLength": 1},
                 {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1}]},
             "continue_work": {"type": "boolean", "default": False}, "reply_to": {"type": "string"},
-            "mention": {"type": "string"}, "request_key": {"type": "string"}},
+            "mention": {"type": "string"}, "request_key": {"type": "string"},
+            **{key: value for key, value in input_schema("reply")["properties"].items()
+               if key in ("voice", "emotion", "spoken_text")}},
             "required": ["context_file", "text"], "additionalProperties": False}},
         {"name": "qqbot_cli", "description": "控制台 CLI。reply/commit 立即提交发送，action=finish 仅结束回合；接口与规范已载入 MAIN.md，参数不明再查 help。",
         "inputSchema": {"type": "object", "properties": {
@@ -85,6 +88,19 @@ def tools_schema():
     return [definitions[1], definitions[0], *definitions[2:]]
 
 
+def tools_schema():
+    role = os.environ.get("QQBOT_MCP_ROLE", "")
+    definitions = _all_tools_schema()
+    if not role:
+        return definitions
+    allowed = {"qqbot_cli", "qqbot_console_help"}
+    if role == "main":
+        allowed.update({"qqbot_reply", "qqbot_read_memory"})
+    elif role != "worker":
+        return []
+    return [tool for tool in definitions if tool["name"] in allowed]
+
+
 def handle(message):
     if not isinstance(message, dict):
         return {"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "Invalid Request"}}
@@ -102,6 +118,8 @@ def handle(message):
     elif method == "tools/call":
         try:
             name, args = params["name"], params.get("arguments") or {}
+            if os.environ.get("QQBOT_MCP_ROLE") and name not in {tool["name"] for tool in tools_schema()}:
+                raise PermissionError("当前代理的 MCP 角色没有此工具；请使用本角色公开的 CLI 接口。")
             if name in ("qqbot_send_files", "qqbot_send_sticker", "qqbot_reply_to"):
                 from console_tools.files import ConsoleFileError
                 raise ConsoleFileError("CLI_REQUIRED", "发送、引用和 @ 已统一使用 CLI。",
@@ -112,12 +130,13 @@ def handle(message):
                           "qqbot_sandbox": "sandbox",
                           "qqbot_console_context": "context", "qqbot_list_tasks": "tasks"}
             if name == "qqbot_reply":
-                if set(args) - {"context_file", "text", "continue_work", "reply_to", "mention", "request_key"}:
+                if set(args) - {"context_file", "text", "continue_work", "reply_to", "mention", "request_key", "voice", "emotion", "spoken_text"}:
                     raise ValueError("快捷回复包含未知参数。")
                 if type(args.get("continue_work", False)) is not bool:
                     raise ValueError("continue_work 必须是布尔值。")
                 value = execute("reply", args["context_file"], text=args["text"], finish=not args.get("continue_work", False),
-                    reply_to=args.get("reply_to", ""), mention=args.get("mention", ""), request_key=args.get("request_key", ""))
+                    reply_to=args.get("reply_to", ""), mention=args.get("mention", ""), request_key=args.get("request_key", ""),
+                    voice=args.get("voice", False), emotion=args.get("emotion", ""), spoken_text=args.get("spoken_text", ""))
             elif name == "qqbot_cli":
                 if set(args) - {"action", "context_file", "operation", "params"}:
                     raise ValueError("控制台调用包含未知字段。")

@@ -301,7 +301,7 @@ class MediaTabWidget(QWidget):
         media_values["search_provider"] = self.media_provider.currentData() or "native"
         media_values["image_generation_provider"] = self.image_generation_provider.currentData() or "native"
         media_values["video_generation_provider"] = self.video_generation_provider.currentData() or "gemini_web"
-        media_values["gemini_web"] = self._gemini_web_values()
+        media_values["gemini_web"].update(self._gemini_web_values())
         for key, box in self.media_checks.items():
             media_values[key] = box.isChecked()
         for key, spin in self.media_numbers.items():

@@ -14,6 +14,8 @@ def current_work_context(config, context):
 
 
 def authorize_work(kind, context, payload=None):
+    if kind == "singing":
+        kind = "process"
     # A new result page can start another agent-backed network search.
     if kind == "media_command" and (payload or {}).get("command") == "next":
         kind = "search"

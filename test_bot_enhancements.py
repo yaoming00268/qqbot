@@ -2152,14 +2152,14 @@ class TestInteractionAndEntityFixes(unittest.TestCase):
         """测试 @机器人 且同时 @其他群成员 时，正确保留被提及目标并识别意图"""
         from onebot_client import clean_cq_mentions
 
-        raw = "[CQ:at,qq=99000000003] 给我骂[CQ:at,qq=2109165295,name=我有点小无奈啊(_|_)]"
+        raw = "[CQ:at,qq=3944402300] 给我骂[CQ:at,qq=2109165295,name=我有点小无奈啊(_|_)]"
         clean_text, is_at_bot, mentioned_users = clean_cq_mentions(
             text=raw,
-            self_id="99000000003"
+            self_id="3944402300"
         )
         self.assertTrue(is_at_bot, "应识别到对机器人的呼叫")
         self.assertIn("@我有点小无奈啊(_|_)", clean_text, "应完整保留被提及的目标群友昵称")
-        self.assertNotIn("99000000003", clean_text, "应清洗掉针对机器人自身的标签")
+        self.assertNotIn("3944402300", clean_text, "应清洗掉针对机器人自身的标签")
         self.assertEqual(len(mentioned_users), 1)
         self.assertEqual(mentioned_users[0]["user_id"], "2109165295")
         self.assertEqual(mentioned_users[0]["nickname"], "我有点小无奈啊(_|_)")
@@ -2169,13 +2169,13 @@ class TestInteractionAndEntityFixes(unittest.TestCase):
         from onebot_client import clean_cq_mentions
 
         segments = [
-            {"type": "at", "data": {"qq": "99000000003"}},
+            {"type": "at", "data": {"qq": "3944402300"}},
             {"type": "text", "data": {"text": " 你认识"}},
             {"type": "at", "data": {"qq": "10001", "name": "千绘莉姐姐"}}
         ]
         clean_text, is_at_bot, mentioned_users = clean_cq_mentions(
-            text="[CQ:at,qq=99000000003] 你认识[CQ:at,qq=10001]",
-            self_id="99000000003",
+            text="[CQ:at,qq=3944402300] 你认识[CQ:at,qq=10001]",
+            self_id="3944402300",
             segments=segments
         )
         self.assertTrue(is_at_bot)
@@ -2211,7 +2211,7 @@ class TestInteractionAndEntityFixes(unittest.TestCase):
             antigravity_client=ai_mock,
             persona_manager=persona_mgr
         )
-        client.self_id = "99000000003"
+        client.self_id = "3944402300"
         client.send_group_message = AsyncMock()
         client.send_action = AsyncMock(return_value={"status": "ok", "data": {}})
 
@@ -2222,7 +2222,7 @@ class TestInteractionAndEntityFixes(unittest.TestCase):
             "sub_type": "poke",
             "group_id": 9999,
             "user_id": 1111,
-            "target_id": 99000000003,
+            "target_id": 3944402300,
             "action": "拍了拍",
             "suffix": "的头",
             "raw_info": "群友 拍了拍 ヨンミン 的头"
@@ -2249,7 +2249,7 @@ class TestInteractionAndEntityFixes(unittest.TestCase):
         client.app_config.bot.autonomous_enabled = True
         client.app_config.bot.search_enabled = False
         ai_mock.chat = ConsoleAgentMock(return_value='{"should_reply":false,"reason":"本轮先听"}')
-        client.self_id = "99000000003"
+        client.self_id = "3944402300"
         client.send_group_message = AsyncMock()
 
         msg_data = {
@@ -2405,7 +2405,7 @@ class TestMultimodalImageRecognitionAndFiltering(unittest.TestCase):
         app_cfg = AppConfig()
         app_cfg.bot.autonomous_enabled = True  # 启用自主回复，确认即使在自主模式下依然被表情包过滤规则拦截
         client = OneBotClient(config=app_cfg, antigravity_client=ai_mock)
-        client.self_id = "99000000003"
+        client.self_id = "3944402300"
         client.send_group_message = AsyncMock()
 
         # 发送一张无任何说明的未知图片
@@ -2439,7 +2439,7 @@ class TestMultimodalImageRecognitionAndFiltering(unittest.TestCase):
         app_cfg.bot.master_id = "1234"  # 设置说话人为主人
         client = OneBotClient(config=app_cfg, antigravity_client=ai_mock)
         client._qq_capture = MagicMock(capture_message=AsyncMock(side_effect=RuntimeError("fixture capture unavailable")))
-        client.self_id = "99000000003"
+        client.self_id = "3944402300"
         client.send_group_message = AsyncMock()
         client.send_action = AsyncMock(return_value={"status": "failed", "retcode": 100, "data": {}})
         client._send_text = AsyncMock()
@@ -2679,7 +2679,7 @@ class TestPeriodicPresetReminderAndTokenOptimization(unittest.TestCase):
         ai_mock = mock_agent()
         ai_mock.chat = ConsoleAgentMock(return_value='{"should_reply": true, "action": "none", "reply": "收到"}')
         client = OneBotClient(config=AppConfig(), antigravity_client=ai_mock)
-        client.self_id = "99000000003"
+        client.self_id = "3944402300"
         client.send_group_message = AsyncMock()
 
         # 模拟群记忆中已累计有 9 次问答交互
@@ -2693,7 +2693,7 @@ class TestPeriodicPresetReminderAndTokenOptimization(unittest.TestCase):
             "group_id": "grp_persist_turn",
             "user_id": 999,
             "message_id": "msg_turn_10",
-            "raw_message": "[CQ:at,qq=99000000003] 轮次测试"
+            "raw_message": "[CQ:at,qq=3944402300] 轮次测试"
         }
 
         async def run_msg():
@@ -2851,7 +2851,7 @@ class TestQuoteAndReplyImageTrace(unittest.TestCase):
         config = AppConfig()
         config.bot.qq_window_capture = False  # Legacy original-file cache behavior is explicit.
         client = OneBotClient(config=config, antigravity_client=ai_mock)
-        client.self_id = "99000000003"
+        client.self_id = "3944402300"
         client.send_group_message = AsyncMock()
 
         # 模拟步骤 1: 用户在群里发送了一张游戏结算图片 (消息ID: 1508246219)
@@ -2877,7 +2877,7 @@ class TestQuoteAndReplyImageTrace(unittest.TestCase):
         client._recent_messages_cache["1508246219"] = {
             "message_id": "1508246219",
             "group_id": "1129846525",
-            "user_id": "99000000002",
+            "user_id": "3060242660",
             "nickname": "雪村奈々子",
             "raw_message": "[CQ:image,file=score.jpg]",
             "clean_text": "[用户发送了图像: 游戏/音游结算成绩截图 | 原图: [score.jpg](file:///G:/qqbot/data/cache/images/score.jpg)]",
@@ -2890,12 +2890,12 @@ class TestQuoteAndReplyImageTrace(unittest.TestCase):
             "post_type": "message",
             "message_type": "group",
             "group_id": "1129846525",
-            "user_id": "99000000002",
+            "user_id": "3060242660",
             "message_id": "312849562",
-            "raw_message": "[CQ:reply,id=1508246219][CQ:at,qq=99000000003,name=ヨンミン] 分析一下这个",
+            "raw_message": "[CQ:reply,id=1508246219][CQ:at,qq=3944402300,name=ヨンミン] 分析一下这个",
             "message": [
                 {"type": "reply", "data": {"id": "1508246219"}},
-                {"type": "at", "data": {"qq": "99000000003"}},
+                {"type": "at", "data": {"qq": "3944402300"}},
                 {"type": "text", "data": {"text": " 分析一下这个"}}
             ]
         }
@@ -2943,7 +2943,7 @@ class TestQuoteAndReplyImageTrace(unittest.TestCase):
             config = AppConfig()
             config.bot.runtime_database_path = str(Path(td) / "runtime.sqlite3")
             client = OneBotClient(config=config, antigravity_client=ai_mock)
-            client.self_id = "99000000003"
+            client.self_id = "3944402300"
             client.send_group_message = AsyncMock()
 
             # 模拟 get_msg 返回
@@ -2987,12 +2987,12 @@ class TestQuoteAndReplyImageTrace(unittest.TestCase):
                 "post_type": "message",
                 "message_type": "group",
                 "group_id": "1129846525",
-                "user_id": "99000000002",
+                "user_id": "3060242660",
                 "message_id": "99999",
-                "raw_message": "[CQ:reply,id=8888][CQ:at,qq=99000000003] 帮我看看这个",
+                "raw_message": "[CQ:reply,id=8888][CQ:at,qq=3944402300] 帮我看看这个",
                 "message": [
                     {"type": "reply", "data": {"id": "8888"}},
-                    {"type": "at", "data": {"qq": "99000000003"}},
+                    {"type": "at", "data": {"qq": "3944402300"}},
                     {"type": "text", "data": {"text": " 帮我看看这个"}}
                 ]
             }
@@ -3000,7 +3000,7 @@ class TestQuoteAndReplyImageTrace(unittest.TestCase):
             async def processed_message(*args, **kwargs):
                 if "record.png" in kwargs.get("content", ""):
                     return ("这是我的绝版成绩[用户发送了图像: 游戏结算页显示绝版成绩和 S 评级]", [mock_record_analysis])
-                return ("[CQ:at,qq=99000000003] 帮我看看这个", [])
+                return ("[CQ:at,qq=3944402300] 帮我看看这个", [])
 
             with patch("onebot_client.process_multimodal_message", new=AsyncMock(side_effect=processed_message)) as mock_pmm:
 

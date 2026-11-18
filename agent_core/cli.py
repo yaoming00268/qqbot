@@ -18,8 +18,8 @@ def database_path(config):
 async def serve(config, *, ai=None, config_file=""):
     from vm_protocol import file_lock
     if ai is None and config.agent.autonomous_model_enabled:
-        from antigravity_client import AntigravityClient
-        ai = AntigravityClient(**config.antigravity.model_dump(), system_prompt="",
+        from model_backend import create_ai_client
+        ai = create_ai_client(config, system_prompt="",
             sessions_file=str(database_path(config).parent / "actor_model_sessions.json"))
     with file_lock(database_path(config).with_suffix(".service.lock"), timeout=1):
         runtime = ActorRuntime(config.agent, database_path=database_path(config), ai=ai)
@@ -44,6 +44,8 @@ async def serve(config, *, ai=None, config_file=""):
                 await asyncio.sleep(1)
         finally:
             await runtime.close()
+            if ai is not None and hasattr(ai, "aclose"):
+                await ai.aclose()
 
 
 def main(argv=None):

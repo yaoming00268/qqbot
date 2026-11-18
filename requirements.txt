@@ -15,3 +15,14 @@ rapidocr-onnxruntime>=1.4.4,<2
 playwright>=1.51,<2
 lmstudio>=1.5,<2
 numpy>=1.26,<3
+pykakasi==2.3.0
+silk-python==0.2.9
+deepseek-harness-sdk==0.2.2rc2
+deepseek-harness-runtime-bin==0.2.2rc2
+requests>=2.32,<3
+wrapt>=1.16,<2
+psutil>=5.9,<8
+
+# Windows Core Audio session control for opt-in local spectator playback
+pycaw==20260927
+comtypes==1.4.16

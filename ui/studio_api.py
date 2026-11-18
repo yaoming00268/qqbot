@@ -17,7 +17,7 @@ import threading
 import time
 import uuid
 
-from config import AppConfig, EmotionConfig
+from config import AppConfig, EmotionConfig, config_lock
 from persona_manager import PersonaManager, PersonaPreset
 
 
@@ -105,7 +105,10 @@ class StudioAPI:
             self._events.append({"seq": self._sequence, "kind": kind, "time": time.time(), "data": data})
 
     def _status(self):
-        return {"state": self._state, "pid": self._process.pid if self._process and self._process.poll() is None else None,
+        pid = self._process.pid if self._process and self._process.poll() is None else None
+        from voice_live import applied_status
+        return {"state": self._state, "pid": pid,
+                "voice": applied_status(self._home, self._config().voice, pid),
                 "started_at": self._started_at, "exit_code": self._exit_code,
                 "task": self._task, "native": self._native, "closing": self._closing}
 
@@ -135,20 +138,8 @@ class StudioAPI:
         """Merge edited sections with the latest disk state; reject stale editors."""
         if not isinstance(changes, dict) or not changes:
             raise ValueError("没有需要保存的配置。")
-        with self._lock:
-            if revision(self._config_path) != expected_revision:
-                raise ValueError("配置已被其他窗口或机器人更新。请重新载入后再保存。")
-            data = self._config().model_dump(mode="json")
-            if set(changes) - set(data):
-                raise ValueError("未知配置分区。")
-            for section, fields in changes.items():
-                if not isinstance(fields, dict):
-                    raise ValueError("配置分区必须为对象。")
-                if set(fields) - set(data[section]):
-                    raise ValueError(f"{section} 包含未知配置字段。")
-                data[section].update(fields)
-            config = AppConfig.model_validate(data)
-            config.save(str(self._config_path))
+        with self._lock, config_lock(self._config_path):
+            config = AppConfig.update_fields(self._config_path, changes, expected_revision=expected_revision)
             return {"config": config.model_dump(mode="json"), "revision": revision(self._config_path)}
 
     @bridge
@@ -174,6 +165,27 @@ class StudioAPI:
             return self._personas()
 
     @bridge
+    def conversations(self, operation="list", params=None):
+        from conversation_studio import catalog, update
+        params = params or {}
+        with self._lock, config_lock(self._config_path):
+            config = self._config()
+            personas = PersonaManager(str(self._home / "personas.yaml"))
+            if operation in ("save", "remove"):
+                if params.get("revision") != revision(self._config_path):
+                    raise ValueError("配置已更新，请重新载入后保存对话设置。")
+                value = update(config, personas, params, remove=operation == "remove")
+                config = AppConfig.update_fields(self._config_path,
+                    {"bot": {"conversations": {key: {source: rule.model_dump() for source, rule in mapping.items()}
+                                                for key, mapping in value.items()}}},
+                    expected_revision=params["revision"])
+            elif operation != "list":
+                raise ValueError("未知对话设置操作。")
+            return {**catalog(self._home, config, personas), "revision": revision(self._config_path),
+                    "settings": {key: {source: rule.model_dump() for source, rule in mapping.items()}
+                                 for key, mapping in config.bot.conversations.items()}}
+
+    @bridge
     def persona_action(self, action, name, expected_revision):
         with self._lock:
             if revision(self._home / "personas.yaml") != expected_revision:
@@ -183,6 +195,10 @@ class StudioAPI:
                 if not manager.set_active(name):
                     raise ValueError("角色不存在。")
             elif action == "delete":
+                preset = manager.get_preset(name)
+                if preset and any(rule.persona_id == preset.id or rule.history_persona_id == preset.id
+                                  for mapping in self._config().bot.conversations.values() for rule in mapping.values()):
+                    raise ValueError("该人设仍被对话设置或共享历史引用，请先在“对话与代理”中取消绑定。")
                 if not manager.delete_preset(name):
                     raise ValueError("至少需要保留一个角色。")
             else:
@@ -349,6 +365,11 @@ class StudioAPI:
         from config import GeminiWebConfig
         config = GeminiWebConfig.model_validate({**self._config().media.gemini_web.model_dump(), **(values or {})})
         config.cookie_file = str(self._path(config.cookie_file))
+        config.page_profile_dir = str(self._path(config.page_profile_dir))
+        if operation == "connect" and config.transport == "browser":
+            from gemini_page_browser import launch_page_login
+            launch_page_login(config)
+            return {"opened": True}
         if operation == "connect":
             import webbrowser
             from gemini_browser_link import GeminiBrowserLink
@@ -368,6 +389,9 @@ class StudioAPI:
             from media_downloader import MediaError
             def inspect(stop, progress):
                 try:
+                    if config.transport == "browser":
+                        from gemini_page_browser import inspect_page_account
+                        return asyncio.run(asyncio.wait_for(inspect_page_account(config), timeout=min(config.timeout_seconds, 60)))
                     return asyncio.run(inspect_account(config))
                 except Exception as error:
                     raise ValueError(str(error) if isinstance(error, MediaError) else public_error(error)) from None
@@ -412,6 +436,364 @@ class StudioAPI:
                 self._finish_close()
         threading.Thread(target=work, daemon=True).start()
         return {"id": identity, "state": "running"}
+
+    @bridge
+    def voice(self, operation, params=None):
+        import asyncio
+        from voice_config import VoiceConfig
+        from voice_service import VoiceService, load_catalog, voice_context
+        params = params or {}
+        if operation == "apply":
+            changes = params.get("changes", {})
+            from voice_config import VoiceConfig
+            if not isinstance(changes, dict) or not changes or set(changes) - set(VoiceConfig.model_fields):
+                raise ValueError("请选择有效的语音配置字段。")
+            result = self.save_config({"voice": changes}, params.get("revision", ""))
+            if not result["ok"]:
+                raise ValueError(result["error"])
+            return {**result["data"], "applied": self._status()["voice"]}
+        config = VoiceConfig.model_validate({**self._config().voice.model_dump(), **params.get("config", {})})
+        for key in ("catalog_path", "cache_dir", "engine_python", "engine_directory", "engine_config"):
+            setattr(config, key, str(self._path(getattr(config, key))))
+        config.voicestudio.source_directory = str(self._path(config.voicestudio.source_directory))
+        if operation == "catalog":
+            from voice_emotions import presets
+            path = Path(config.catalog_path)
+            return {"catalog": load_catalog(config) if path.is_file() else {"version": 1, "characters": {}},
+                    "revision": revision(path), "capability": voice_context(config), "presets": presets()}
+        if operation == "save_catalog":
+            from voice_emotions import presets
+            path = Path(config.catalog_path)
+            with self._lock:
+                if params.get("revision", "") != revision(path):
+                    raise ValueError("样本目录已更新，请重新载入后编辑。")
+                value = params.get("catalog", {})
+                if value.get("version") != 1 or not isinstance(value.get("characters"), dict):
+                    raise ValueError("样本目录需要 version: 1 和 characters。")
+                for key, character in value["characters"].items():
+                    if not isinstance(character, dict) or not isinstance(character.get("emotions"), dict):
+                        raise ValueError("每个角色需要 emotions 情绪参考映射。")
+                    for label, reference in character["emotions"].items():
+                        if not label or not isinstance(reference, dict):
+                            raise ValueError("情绪标签不能为空，参考切片需要对象。")
+                atomic_json(path, value)
+            return {"catalog": value, "revision": revision(path), "capability": voice_context(config), "presets": presets()}
+        if operation == "prepare":
+            from voice_text import prepare_chunks
+            return {"chunks": [item.to_dict() for item in prepare_chunks(params.get("text", ""), config, params.get("emotion", ""))]}
+        if operation == "cancel":
+            self._task_stop.set()
+            return {"state": "cancelling"}
+        if operation == "engine_status":
+            from voice_engine import engine_status
+            return engine_status()
+        if operation == "engine_stop":
+            from voice_engine import stop_engine, stop_studio
+            return self._run_task("voice-engine", lambda stop, progress: {"studio": stop_studio(), "engine": stop_engine()})
+        if operation == "engine_start":
+            from voice_engine import ready
+            def start(stop, progress):
+                def current():
+                    if stop.is_set():
+                        from emotion_training import TrainingCancelled
+                        raise TrainingCancelled()
+                return asyncio.run(ready(config, check_current=current))
+            return self._run_task("voice-engine", start)
+        if operation == "check":
+            return self._run_task("voice-check", lambda stop, progress: asyncio.run(VoiceService(config).check()))
+        if operation == "preview":
+            import base64
+            config.enabled = True
+            config.max_duration_seconds = min(30, config.max_duration_seconds)
+            def preview(stop, progress):
+                from emotion_training import TrainingCancelled
+                async def work():
+                    def stream(event):
+                        if event.get("type") == "audio":
+                            self._emit("voice_audio", {**event, "task_id": self._task["id"]})
+                        else:
+                            progress(event)
+                    task = asyncio.create_task(VoiceService(config).synthesize(params.get("text", ""),
+                        params.get("emotion", ""), spoken_text=params.get("spoken_text", ""), progress=stream))
+                    try:
+                        while not task.done():
+                            if stop.is_set():
+                                raise TrainingCancelled()
+                            await asyncio.wait({task}, timeout=0.1)
+                        result = task.result()
+                        result["wav_base64"] = base64.b64encode(Path(result["wav_path"]).read_bytes()).decode("ascii")
+                        return result
+                    finally:
+                        if not task.done():
+                            task.cancel()
+                            await asyncio.gather(task, return_exceptions=True)
+                return asyncio.run(work())
+            return self._run_task("voice-preview", preview)
+        raise ValueError("未知语音工作室操作。")
+
+    @bridge
+    def voice_training(self, operation, params=None):
+        from voice_training import VoiceTraining
+        params = params or {}
+        from voice_config import VoiceConfig
+        voice = VoiceConfig.model_validate({**self._config().voice.model_dump(), **params.get("config", {})})
+        manager = VoiceTraining(voice, self._home)
+        if operation == "status":
+            return manager.status()
+        if operation == "dataset":
+            return manager.dataset(params.get("dataset_id", ""))
+        if operation == "save_annotations":
+            from voice_dataset import update_annotations
+            with self._lock:
+                return update_annotations(manager.root, params.get("dataset_id", ""),
+                    params.get("edits", []), params.get("revision", ""))
+        if operation == "use_reference":
+            with self._lock:
+                return manager.use_reference(params.get("dataset_id", ""), params.get("sample_id", ""),
+                    params.get("character_id", ""), dataset_revision=params.get("dataset_revision", ""),
+                    catalog_revision=params.get("catalog_revision", ""), replace=params.get("replace") is True)
+        if operation == "audio":
+            import base64
+            data = manager.dataset(params.get("dataset_id", ""))
+            row = next((r for r in data["rows"] if r["id"] == params.get("sample_id")), None)
+            if row is None:
+                raise ValueError("训练切片不存在。")
+            path = manager.root / "datasets" / data["id"] / row["audio"]
+            return {"wav_base64": base64.b64encode(path.read_bytes()).decode("ascii")}
+        if operation == "cancel":
+            self._task_stop.set()
+            return {"state": "cancelling"}
+        if operation == "log":
+            return manager.log(params.get("run_id", ""))
+        if operation == "publish":
+            with self._lock:
+                return manager.publish(params.get("run_id", ""), params.get("character_id", ""),
+                    expected_revision=params.get("revision", ""))
+        if operation == "setup":
+            from voice_training_setup import setup_training
+            return self._run_task("voice-training-setup", lambda stop, progress: setup_training(self._home, voice, progress=progress))
+        if operation == "assets":
+            return self._run_task("voice-training-assets", lambda stop, progress: manager.worker("assets",
+                {"version": manager.options.version}, stop=stop, progress=progress))
+        if operation == "import":
+            return self._run_task("voice-training-import", lambda stop, progress: manager.import_annotations(
+                params.get("path", ""), speaker=params.get("speaker", ""), name=params.get("name", ""), stop=stop, progress=progress))
+        if operation == "prepare_audio":
+            paths = params.get("paths", [])
+            if not isinstance(paths, list) or not paths or len(paths) > 1000:
+                raise ValueError("请选择 1–1000 个本地音频文件。")
+            sources = [{"audio": str(self._path(p)), "source": str(self._path(p))} for p in paths]
+            return self._run_task("voice-training-import", lambda stop, progress: manager.prepare_audio(sources,
+                speaker=params.get("speaker", ""), language=params.get("language", "ja"), name=params.get("name", ""), stop=stop, progress=progress))
+        if operation == "chieri":
+            def acquire(stop, progress):
+                result = manager.acquire_chieri(stop=stop, progress=progress)
+                return manager.prepare_audio(result["sources"], speaker="chieri", name="雪村千绘莉 · 官方普通试听样本",
+                    stop=stop, progress=progress, source="https://www.cabbage-soft.com/products/amachoco/",
+                    license_text=result["license"], attribution=result["attribution"])
+            return self._run_task("voice-training-import", acquire)
+        if operation == "train":
+            return self._run_task("voice-training-run", lambda stop, progress: manager.run(params.get("dataset_id", ""),
+                allow_unreviewed=params.get("allow_unreviewed") is True, resume=params.get("resume", ""), stop=stop, progress=progress))
+        if operation == "validate":
+            return self._run_task("voice-training-validate", lambda stop, progress: manager.validate(params.get("run_id", ""), stop=stop, progress=progress))
+        if operation == "validation_audio":
+            import base64
+            folder, manifest, _, _ = manager.character(params.get("run_id", ""))
+            samples = manifest.get("validation", {}).get("samples", [])
+            index = int(params.get("index", 0))
+            if not 0 <= index < len(samples):
+                raise ValueError("请先执行验证试听。")
+            path = Path(samples[index]["wav_path"]).resolve()
+            if not path.is_relative_to((folder / "validation-audio").resolve()):
+                raise ValueError("验证音频路径无效。")
+            return {"wav_base64": base64.b64encode(path.read_bytes()).decode("ascii")}
+        raise ValueError("未知语音训练操作。")
+
+    @bridge
+    def singing(self, operation, params=None):
+        import asyncio
+        import base64
+        from singing_service import SingingService, singing_context
+        from voice_config import VoiceConfig
+        from emotion_training import TrainingCancelled
+        params = params or {}
+        config = VoiceConfig.model_validate({**self._config().voice.model_dump(), **params.get("config", {})})
+        for key in ("catalog_path", "cache_dir", "engine_python", "engine_directory", "engine_config"):
+            setattr(config, key, str(self._path(getattr(config, key))))
+        for key in ("cache_dir", "engine_python", "engine_directory", "generation_python", "generation_directory"):
+            setattr(config.singing, key, str(self._path(getattr(config.singing, key))))
+        if operation == "status":
+            return singing_context(config)
+        if operation == "cancel":
+            self._task_stop.set()
+            return {"state": "cancelling"}
+        if operation == "load_lyrics":
+            path = self._path(params.get("path", ""))
+            if not path.is_file() or path.stat().st_size > 128 * 1024:
+                raise ValueError("请选择小于 128KB 的歌词文本。")
+            raw = path.read_bytes()
+            text = raw.decode("utf-16" if raw.startswith((b"\xff\xfe", b"\xfe\xff")) else "utf-8-sig")
+            if len(text) > config.singing.max_lyrics_chars:
+                raise ValueError("歌词超过唱歌字数上限。")
+            return {"text": text}
+        if operation == "open_result":
+            path = self._path(params.get("directory", ""))
+            root = Path(config.singing.cache_dir).resolve()
+            if not path.is_relative_to(root) or not (path / "manifest.json").is_file():
+                raise ValueError("请选择唱歌工作室生成的成果目录。")
+            os.startfile(str(path))
+            return {"opened": True}
+        if operation == "check":
+            return self._run_task("singing-check", lambda stop, progress: asyncio.run(SingingService(config).check()))
+        if operation == "render":
+            def render(stop, progress):
+                def current():
+                    if stop.is_set():
+                        raise TrainingCancelled()
+                result = asyncio.run(SingingService(config).render(params.get("request", {}), progress=progress,
+                                                                  check_current=current, allow_disabled=True))
+                result["mp3_base64"] = base64.b64encode(Path(result["mp3_path"]).read_bytes()).decode("ascii")
+                return result
+            return self._run_task("singing-render", render)
+        raise ValueError("未知唱歌操作。")
+
+    @bridge
+    def broadcast(self, operation, params=None):
+        """Local operations UI; secrets stay in private files and transport code."""
+        from broadcast_host import execute
+        params = params or {}
+        if operation in {"login_open", "login_status", "browser_open", "livehime_status", "livehime_open", "livehime_prepare"}:
+            from bilibili_desktop import open_browser, login_status, livehime_status, open_livehime, prepare_livehime
+            config = self._config()
+            if operation == "login_status":
+                return login_status(self._home, config.bilibili.credentials_file)
+            if operation in {"login_open", "browser_open"}:
+                if params.get("reset") and any(os.environ.get("BILIBILI_" + name) for name in ("SESSDATA", "BILI_JCT")):
+                    raise ValueError("当前使用环境变量登录态，请先清除环境变量再切换浏览器账号。")
+                return open_browser(self._home, url=params.get("url"), reset=bool(params.get("reset", False)))
+            if operation == "livehime_status":
+                return livehime_status(config.bilibili.livehime)
+            if operation == "livehime_open":
+                return open_livehime(config.bilibili.livehime)
+            return prepare_livehime(self._home, config)
+        if operation.startswith("voice_"):
+            import asyncio
+            from broadcast_tts import broadcast_voice_context
+            from voice_service import VoiceService, load_catalog
+            from voice_engine import ready, engine_status, studio_status, stop_engine, stop_studio
+            voice = self._config().broadcast_voice.model_copy(deep=True)
+            for key in ("catalog_path", "cache_dir", "engine_python", "engine_directory", "engine_config"):
+                setattr(voice, key, str(self._path(getattr(voice, key))))
+            voice.voicestudio.source_directory = str(self._path(voice.voicestudio.source_directory))
+            if operation == "voice_catalog":
+                from voice_emotions import presets
+                return {"catalog": load_catalog(voice), "capability": broadcast_voice_context(voice), "presets": presets()}
+            if operation == "voice_check":
+                async def check():
+                    result = await VoiceService(voice).check()
+                    return {"reachable": result["reachable"], **broadcast_voice_context(voice)}
+                return self._run_task("broadcast-voice-check", lambda stop, progress: asyncio.run(check()))
+            if operation == "voice_engine_status":
+                return {"engine": engine_status(voice), "studio": studio_status(voice)}
+            if operation == "voice_engine_start":
+                return self._run_task("broadcast-voice-engine", lambda stop, progress: asyncio.run(ready(voice)))
+            if operation == "voice_engine_stop":
+                return self._run_task("broadcast-voice-engine", lambda stop, progress: {"studio": stop_studio(voice), "engine": stop_engine(voice)})
+            raise ValueError("未知直播语音操作。")
+        if operation == "preview":
+            from vtuber_host import overlay_url
+            return {"url": overlay_url(self._config().vtuber, preview=True)}
+        if operation in {"bind_actor", "bind_account_actor", "account_preset"}:
+            from agent_core.configuration import ActorConfig
+            with self._lock, config_lock(self._config_path):
+                current_revision = revision(self._config_path)
+                if (operation == "account_preset" or "revision" in params) and params.get("revision") != current_revision:
+                    raise ValueError("配置已被其他窗口或机器人更新。请重新载入后再保存。")
+                config = self._config()
+                mode = params.get("mode")
+                if operation == "account_preset" and mode not in {"browse", "operate", "pause"}:
+                    raise ValueError("请选择浏览与草稿、自主运营或暂停。")
+                actor_id = config.bilibili.autonomy.actor_id
+                if operation == "account_preset" and mode == "pause":
+                    changes = {"bilibili": {"autonomy": {**config.bilibili.autonomy.model_dump(), "enabled": False}}}
+                else:
+                    manager = PersonaManager(str(self._home / "personas.yaml"))
+                    persona = manager.presets.get(manager.active_persona_name)
+                    if persona is None:
+                        raise ValueError("请先选择一个角色预设。")
+                    actor_id = config.agent.bindings.get("persona:" + persona.id, "")
+                    if not actor_id or config.agent.actors[actor_id].persona_id != persona.id:
+                        actor_id = next((key for key, actor in config.agent.actors.items() if actor.persona_id == persona.id), "")
+                    if not actor_id:
+                        actor_id = "broadcast_" + re.sub(r"[^a-zA-Z0-9_-]", "", persona.id)[:48]
+                        if actor_id in config.agent.actors:
+                            actor_id += "_" + uuid.uuid4().hex[:8]
+                    existing = config.agent.actors.get(actor_id)
+                    config.agent.actors[actor_id] = (existing.model_copy(update={"enabled": True}) if existing else
+                        ActorConfig(name=persona.name, persona_id=persona.id, enabled=True))
+                    config.agent.bindings["persona:" + persona.id] = actor_id
+                    agent = {"actors": config.agent.actors, "bindings": config.agent.bindings, "enabled": True}
+                    if operation == "bind_actor":
+                        bili = {"actor_id": actor_id}
+                    else:
+                        autonomy = {**config.bilibili.autonomy.model_dump(), "actor_id": actor_id}
+                        bili = {"autonomy": autonomy}
+                        if operation == "account_preset":
+                            autonomy.update(enabled=True, allow_comments=mode == "operate", allow_likes=mode == "operate",
+                                            allow_dynamics=mode == "operate", allow_video_uploads=False, allow_profile_update=False)
+                            bili["enabled"] = True
+                            if mode == "operate":
+                                bili["allow_publish"] = True
+                            agent["autonomous_model_enabled"] = True
+                    changes = {"agent": agent, "bilibili": bili}
+                config = AppConfig.update_fields(self._config_path, changes, expected_revision=current_revision)
+                return {"config": config.model_dump(mode="json"), "revision": revision(self._config_path), "actor_id": actor_id}
+        if operation == "import_media":
+            import shutil
+            path = self._path(params.get("path", ""))
+            if not path.is_file() or path.suffix.lower() not in {".mp4", ".mkv", ".mov", ".flv", ".webm", ".png", ".jpg", ".jpeg", ".webp", ".wav", ".mp3", ".flac", ".ogg", ".aac", ".m4a"}:
+                raise ValueError("请选择视频、封面或音频文件。")
+            with path.open("rb") as stream:
+                signature = hashlib.file_digest(stream, "sha256").hexdigest()
+            directory = self._home / "data/broadcast/media"
+            directory.mkdir(parents=True, exist_ok=True)
+            target = directory / (signature[:20] + path.suffix.lower())
+            if not target.exists():
+                temporary = target.with_name(target.name + "." + uuid.uuid4().hex + ".tmp")
+                try:
+                    shutil.copyfile(path, temporary)
+                    os.replace(temporary, target)
+                finally:
+                    temporary.unlink(missing_ok=True)
+            return {"path": str(target), "sha256": signature, "name": path.name}
+        if operation == "avatar":
+            for old, new in (("avatar_emotion", "emotion"), ("motion_group", "group"), ("motion_index", "index")):
+                if old in params:
+                    params[new] = params.pop(old)
+        return execute(self._config_path, operation, params)
+
+    @bridge
+    def dsh(self, operation, params=None):
+        import asyncio
+        from dsh_config import DSHConfig
+        params = params or {}
+        config = DSHConfig.model_validate({**self._config().deepseek_harness.model_dump(), **params.get("config", {})})
+        config.home, config.workspace = str(self._path(config.home)), str(self._path(config.workspace))
+        if operation == "export_mcp":
+            from dsh_profile import export_mcp_config
+            return {"path": str(export_mcp_config(config.home)), "sdk": "0.2.2rc2"}
+        if operation == "check":
+            from dsh_client import DeepSeekHarnessClient
+            def check(stop, progress):
+                client = DeepSeekHarnessClient(config, sessions_file=str(self._home / "data/studio/dsh-check-sessions.json"))
+                ok, message = asyncio.run(client.probe(config.initialize_timeout_seconds))
+                if not ok:
+                    raise ValueError(message)
+                return {"ok": ok, "message": message, "provider": config.provider, "model": config.model,
+                        "api_key_present": bool(os.environ.get(config.api_key_env)), "home": config.home}
+            return self._run_task("dsh-check", check)
+        raise ValueError("未知 DSH 操作。")
 
     @bridge
     def emotion(self, operation, params=None):
@@ -545,6 +927,10 @@ class StudioAPI:
         if self._browser_link:
             self._browser_link.close()
             self._browser_link = None
+        from broadcast_host import stop_server as stop_broadcast
+        from vtuber_host import stop_server as stop_avatar
+        stop_broadcast(self._config_path)
+        stop_avatar(self._config().vtuber)
         if self._window:
             self._window.destroy()
 

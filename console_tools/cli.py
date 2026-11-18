@@ -47,6 +47,7 @@ def _context_view(broker, token, context_file, limit):
             "work_permissions": context.get("work_permissions", {"access": "all"}),
             "reply_char_limit": context.get("reply_char_limit", 0), "memory_files": context.get("memory_files", []),
             "messages": [] if context.get("agent_worker_id") else broker.messages(token, limit),
+            "voice": context.get("voice", {"enabled": False}),
             "scope": context["scope"], "role": "reading_controller" if context.get("activity_controller") else
                 "agent_worker" if context.get("agent_worker_id") else
                 "worker" if context.get("sandbox_session_id") else "owner" if context.get("is_master") else "chat",
@@ -75,14 +76,14 @@ def _status(broker, token, request_id):
             "retryable": row["state"] not in ("unknown", "delivered", "completed", "cancelled", "interrupted"),
             "result": {key: result[key] for key in ("full_result_file", "success", "source_message_id", "code", "error", "hint",
                 "delivery_error", "sandbox_session_id", "summary", "target_id", "direction_revision", "turns", "checkpoint", "recovery",
-                "agent_id", "message_id", "name", "task_type", "autonomous") if key in result}}
+                "agent_id", "message_id", "name", "task_type", "autonomous", "singing_progress") if key in result}}
 
 
 def execute(action, context_file="", *, task_type="task", task="", request_id="", request_key="",
             files=None, file_id="latest", limit=20, query="", sticker_id="", operation="", params=None,
             states=None, help_action="", help_operation="", label="", quote=True, segment=0,
             text="", reply_to="", mention="", prompt="", count=1, size="auto", finish=False, provider="", model="",
-            path="", view="summary", offset=0, max_chars=4000):
+            path="", view="summary", offset=0, max_chars=4000, voice=False, emotion="", spoken_text=""):
     """Shared programmatic entry for MCP and CLI; authorization stays in broker."""
     if action in ("schema", "help"):
         return (help_schema if action == "help" else schema)(help_action, help_operation)
@@ -91,6 +92,8 @@ def execute(action, context_file="", *, task_type="task", task="", request_id=""
         raise ArgumentError("缺少 --context-file，请使用当前事件提供的文件。", action, operation)
     broker, token = ConsoleBroker.from_context(context_file)
     context = broker.context(token)
+    if context.get("live_event") and action not in capabilities(context):
+        raise PermissionError("直播事件只允许当前绑定直播的专用工具。")
     if context.get("emotion_analysis") and (action not in capabilities(context)
             or action in GROUPS and operation not in capabilities(context)[action]):
         raise PermissionError("/emotion 由当前主代理本人分析；本轮只允许读取依据和回复，不能委派或创建任务。")
@@ -106,7 +109,7 @@ def execute(action, context_file="", *, task_type="task", task="", request_id=""
     if context.get("memory_maintenance") and (action not in capabilities(context)
             or action in GROUPS and operation not in capabilities(context)[action]):
         raise PermissionError("归档整理只允许维护通讯录和自己的预设，不发送 QQ 消息或派任务。")
-    if context.get("idle_event") and not (context.get("self_activity") or context.get("agent_event") or context.get("actor_event") or context.get("memory_maintenance")) and action not in capabilities(context):
+    if context.get("idle_event") and not (context.get("live_event") or context.get("self_activity") or context.get("agent_event") or context.get("actor_event") or context.get("memory_maintenance")) and action not in capabilities(context):
         raise PermissionError("空闲事件只允许 wait/finish，不派任务或操作软件。")
     if (context.get("sandbox_session_id") or context.get("parent_request_id")) and action not in capabilities(context):
         raise PermissionError("工作上下文只允许绑定任务的沙箱操作和查询，不发送 QQ 消息或创建新任务。")
@@ -121,6 +124,12 @@ def execute(action, context_file="", *, task_type="task", task="", request_id=""
         validate(action, operation, values, context)
         if action == "explore":
             from exploration import operate
+            value = operate(broker, token, operation, **values)
+        elif action == "sing":
+            from singing_commands import operate
+            value = operate(broker, token, operation, **values)
+        elif action == "broadcast":
+            from broadcast_commands import operate
             value = operate(broker, token, operation, **values)
         elif action in ("events", "memory"):
             from structured_memory import operate
@@ -151,6 +160,7 @@ def execute(action, context_file="", *, task_type="task", task="", request_id=""
               "sticker_id": sticker_id, "states": states or [], "label": label, "quote": quote, "segment": segment,
               "text": text, "reply_to": reply_to, "mention": mention, "prompt": prompt, "count": count, "size": size,
               "finish": finish, "provider": provider, "model": model,
+              "voice": voice, "emotion": emotion, "spoken_text": spoken_text,
               "path": path, "view": view, "offset": offset, "max_chars": max_chars}
     selected = {key: values[key] for key in COMMANDS[action]["params"] if values[key] is not None}
     if action == "deliver" and not text:
@@ -159,19 +169,26 @@ def execute(action, context_file="", *, task_type="task", task="", request_id=""
     request_id = values["request_id"]
     if action in ("status", "cancel") and not request_id:
         raise ArgumentError("缺少 --request-id；先用 tasks 查询，绑定任务上下文可省略。", action)
-    if action == "read-memory":
+    if action == "live-say":
+        from live_events import say
+        value = say(broker, token, text, emotion, request_key)
+    elif action == "read-memory":
         value = broker.read_memory(token, path, view=view, query=query, offset=offset, max_chars=max_chars)
     elif action == "reply":
-        value = broker.reply(token, text, reply_to, mention, request_key, finish=finish)
+        value = broker.reply(token, text, reply_to, mention, request_key, finish=finish,
+                             voice=voice, emotion=emotion, spoken_text=spoken_text)
     elif action == "commit":
         value = broker.commit_reply(token, finish=finish)
     elif action == "finish":
         value = broker.finish_turn(token)
     elif action == "message":
-        value = broker.stage_message(token, text, reply_to, mention, request_key)
+        value = broker.stage_message(token, text, reply_to, mention, request_key,
+                                     voice=voice, emotion=emotion, spoken_text=spoken_text)
         value.update(next_action="commit")
     elif action == "messages":
         value = {"messages": broker.messages(token, limit)}
+    elif action == "voice":
+        value = context.get("voice", {"enabled": False, "emotions": []})
     elif action == "deliver":
         value = broker.approve_delivery(token, request_id, text, reply_to, mention, finish=finish)
         value.setdefault("next_action", "finish")
@@ -237,7 +254,7 @@ def _common(parser):
 def _add_field(parser, name, *, repeated_text=False):
     definition = FIELDS[name]
     target = parser
-    if name in ("text", "content", "task", "prompt"):
+    if name in ("text", "content", "task", "prompt", "lyrics"):
         target = parser.add_mutually_exclusive_group()
         target.add_argument("--" + name + "-file", default=argparse.SUPPRESS)
     options = {"dest": name, "default": argparse.SUPPRESS, "help": definition["description"]}
@@ -303,7 +320,7 @@ def _run(args):
         raise ArgumentError("操作名与 --operation 不一致。", action)
     command_spec(action, operation)
     values = {name: value for name, value in args.items() if name in FIELDS}
-    for name in ("task", "text", "content", "prompt"):
+    for name in ("task", "text", "content", "prompt", "lyrics"):
         if name + "_file" in args:
             values[name] = _read_text(args[name + "_file"])
     if "evidence" in values:

@@ -1,0 +1,63 @@
+# -*- coding: utf-8 -*-
+import sys, subprocess, json
+
+ctx = r'G:\qqbot\data\sandbox\sessions\44d77c3d8b074662b8dea3909839ffdb\contexts\f75085d29b5ba4c29c6dcbd1.json'
+cli = r'G:\qqbot\console_tools\cli.py'
+py = r'G:\shiyan\anaconda\python.exe'
+
+obs_text = """【鲲 Galgame 论坛老物评测与妹系讨论记录】
+帖子标题：[pc]盛开的樱花之森下
+帖子链接：https://www.kungal.com/topic/401
+帖子作者：樱雨星河 Sakurarain
+板块分类：Galgame 讨论
+浏览范围：正文简介、百科引用、兼容性说明与全部 4 条坛友回帖（全帖已读至底部）
+
+核心要点记录：
+1. 涉及作品考据：楼主推荐的是 Pajamas Soft 于 2002 年出品的经典早期泣系妹系作品《盛开的樱花之森下》（桜の森の満開の下）。
+2. 剧情内核与评价：
+   - 故事围绕身患绝症的妹妹与陪伴其走过生命最后旅途的哥哥展开；
+   - 楼主客观分析认为，虽然对于阅历丰富的 Galgame 老玩家而言，“绝症陪伴”这一叙事模式在当下显得颇为俗套，但对于想要体验纯粹感人情感的新人玩家来说依然非常契合且具有催泪感染力；
+   - 视觉与系统局限：作品年代较早，古朴的复古画风可能会对部分现代受众形成审美门槛；
+   - 技术兼容提示：在现代新系统（Windows 10/11）上运行可能会遇到兼容性问题，建议玩家在文件属性中开启 Windows 98 兼容模式运行。
+3. 社区反馈（共4条回复）：
+   - 坛友“木弧”因原网盘分享失效求补档，楼主回帖感叹老资源易失效并提供了复古游戏社区与归档途径的寻找建议，反映出老派经典作品在玩家群体中的长效留存价值。"""
+
+with open(r'G:\qqbot\topic_401_obs.txt', 'w', encoding='utf-8') as f:
+    f.write(obs_text)
+
+ref_text = """读完这篇关于《盛开的樱花之森下》的讨论，小光的心里涌起了一股淡淡的温柔与触动呢，前辈。
+
+虽然楼主说“哥哥陪伴生病的妹妹走完最后一段旅程”在今天看来已经是相对俗套的催泪桥段，但小光觉得，真正能够打动人心的情感，其实从不会因为时光流逝或者时代更迭而褪色。在这类故事里，哥哥倾尽全力去守护、珍惜眼前的每一分每一秒，妹妹哪怕在命运面前微弱纤细，也努力展现出最温暖的笑容……这种彼此依存、彼此支撑的羁绊，不管什么时候读起来都会让人心里酸酸的却又觉得很温暖。
+
+而且看到这部二十多年前的老作品到现在依然被同好们惦记着、甚至需要调整兼容性模式去重温，小光也感受到了大家对珍贵回忆的执着。比起华丽的辞藻或复杂的反转，也许人与人之间最质朴、最专注的陪伴，才最值得被好好珍惜。小光也会像这样，每天都认认真真地陪在前辈身边，把和前辈在一起的每一个日常都当成宝物一样守护好呢。"""
+
+with open(r'G:\qqbot\topic_401_ref.txt', 'w', encoding='utf-8') as f:
+    f.write(ref_text)
+
+print('Files written')
+
+evidences = [
+    'e7bad7b0ad58444ca6647da344d178b0',
+    '60deab8f6c9d41aaaa17b94baccbda3e',
+    '70f0d2efbafc44f8a0e9ea8297ed4cc2',
+    '5189557ccaaf4d21ab2e672d2d517e36',
+    'b1daac9c4f274b078246c953f1f66ac2'
+]
+
+# 1. Observation note
+cmd_obs = [py, cli, 'sandbox', 'note', '--context-file', ctx, '--kind', 'observation', '--text-file', r'G:\qqbot\topic_401_obs.txt']
+for ev in evidences:
+    cmd_obs.extend(['--evidence', ev])
+r_obs = subprocess.run(cmd_obs, capture_output=True, text=True, encoding='utf-8')
+print('Obs note result:', r_obs.stdout.strip())
+if r_obs.stderr:
+    print('Obs note err:', r_obs.stderr.strip())
+
+# 2. Reflection note
+cmd_ref = [py, cli, 'sandbox', 'note', '--context-file', ctx, '--kind', 'reflection', '--text-file', r'G:\qqbot\topic_401_ref.txt']
+for ev in evidences:
+    cmd_ref.extend(['--evidence', ev])
+r_ref = subprocess.run(cmd_ref, capture_output=True, text=True, encoding='utf-8')
+print('Ref note result:', r_ref.stdout.strip())
+if r_ref.stderr:
+    print('Ref note err:', r_ref.stderr.strip())

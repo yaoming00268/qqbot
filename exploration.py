@@ -17,9 +17,10 @@ from urllib.parse import urljoin
 EXPLORER_NAME = "兴趣探索"
 EXPLORER_RULES = "围绕自己已有兴趣、未完成问题或新发现持续研究，实际使用工具阅读资料并保留来源。先查 explore sources，再自主选择本机授权文本或公开网络；文本/HTML/JSON 优先 explore read/fetch/parse 或原生网页读取，视觉交互才用浏览器。每次报告实际新发现、未解决问题和下一步；不把计划当经历，不接触其他本机目录或账号。"
 TEXT_SUFFIXES = {".txt", ".md", ".html", ".htm", ".json", ".csv", ".tsv", ".xml", ".rst", ".srt", ".vtt"}
+_DEFAULT_SOURCE = object()
 
 
-def configuration(coordinator, key):
+def configuration(coordinator, key, *, source=_DEFAULT_SOURCE):
     cfg = coordinator.client.app_config
     workspace = coordinator.directory(key) / "exploration"
     roots = {"workspace": str(workspace), "library": str(Path(cfg.bot.runtime_database_path).resolve().parent / "library")}
@@ -27,7 +28,8 @@ def configuration(coordinator, key):
         roots["authorized-" + str(index + 1)] = str(Path(path).expanduser().resolve())
     for name, path in cfg.sandbox.profiles.items():
         roots["profile-" + name] = str(Path(path).expanduser().resolve())
-    source = coordinator.contexts.get(key)
+    if source is _DEFAULT_SOURCE:
+        source = coordinator.contexts.get(key)
     database = Path(cfg.sandbox.directory).resolve() / "sandbox.sqlite3"
     if source and database.is_file():
         # Open an existing grant registry read-only. A different group/account's
@@ -235,7 +237,9 @@ def ensure_exploration(coordinator, key, *, source_token="", goal="", force=Fals
     cfg = coordinator.client.app_config.bot
     if not (cfg.self_activity_enabled and cfg.autonomous_enabled):
         return None
-    source = coordinator.contexts.get(key)
+    metadata = coordinator.broker.context(source_token) if source_token else {}
+    source = (coordinator.context_for(key, metadata["scope"]) if source_token
+              else coordinator.contexts.get(key))
     if source is None or not source.guard():
         return None
     from agent_mailbox import AgentMailbox
@@ -264,11 +268,10 @@ def ensure_exploration(coordinator, key, *, source_token="", goal="", force=Fals
     binding = __import__("bot_identity").bind(coordinator.client, key)
     questions = coordinator.identity.events(binding["identity_owner"], source.scope, limit=8)["events"]
     instruction = goal or session.chat_state.get("autonomy_goal") or "结合自己的兴趣选择下一份有趣资料，实际阅读，记录新发现及下一步；可以先比较本机资料与网络线索，不重复上次成果。"
-    metadata = coordinator.broker.context(source_token) if source_token else {}
     metadata = {**metadata, "namespace": coordinator.namespace, "scope": source.scope, "session_key": key,
         "generation": session.generation, "main_agent": True, "autonomous_agents": True, "idle_event": True, "self_activity": True,
         "turn_managed": False, "is_master": False, "is_admin": False, "sender_id": "", "source_message_id": "",
-        "self_activity_config": {"enabled": True}, "exploration_config": configuration(coordinator, key),
+        "self_activity_config": {"enabled": True}, "exploration_config": configuration(coordinator, key, source=source),
         "work_permissions": cfg.get_work_permissions(source.conversation_id if source.is_group else "").model_dump(),
         "ack_before_work": bool(source_token), "ack_token": source_token}
     context_file = coordinator.broker.issue_context(metadata, coordinator.directory(key) / "contexts")

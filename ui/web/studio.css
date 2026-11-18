@@ -1,4 +1,20 @@
 @charset "UTF-8";
+.voice-preview audio {
+  width: 100%;
+  border-radius: 12px;
+}
+.voice-transcript {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.9;
+  font: inherit;
+  color: var(--muted);
+}
+.voice-path {
+  max-width: 250px;
+  overflow-wrap: anywhere;
+  font-size: 0.8rem;
+}
 :root {
   color-scheme: light;
   --accent: #4268cf;
@@ -490,6 +506,7 @@ small {
   box-shadow: 0 3px 8px rgba(var(--accent-rgb), 0.12);
 }
 .button.primary:hover:not(:disabled) {
+  background: var(--accent);
   filter: brightness(1.06);
 }
 .button.ghost {
@@ -1137,6 +1154,15 @@ kbd {
   font-weight: 500;
   display: block;
 }
+.conversations-layout .persona-item strong {
+  overflow-wrap: anywhere;
+}
+.conversations-layout .persona-item small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .persona-item p {
   font-size: 0.71429rem;
   color: var(--muted);
@@ -1637,6 +1663,11 @@ dialog p {
   color: var(--muted);
   line-height: 1.9;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.page[data-view="broadcast"] .settings-group > .mt {
+  padding: 0 22px 20px;
 }
 .dialog-actions {
   display: flex;
@@ -2000,3 +2031,14 @@ html {
     gap: 8px;
   }
 }
+/* Speech annotations remain usable at narrow desktop window widths. */
+.voice-training-table { min-width: 760px; }
+.voice-training-table td:nth-child(2) { min-width: 240px; width: 45%; }
+.voice-training-table textarea { min-height: 68px; width: 100%; }
+.voice-training-table .voice-annotation-attributes { min-width: 230px; width: 32%; }
+.voice-annotation-choice { display: grid; gap: 5px; margin-bottom: 12px; font-size: 12px; }
+.voice-annotation-choice select { width: 100%; }
+.voice-choice-description { color: var(--muted); font-size: 11px; font-weight: 400; line-height: 1.6; }
+.voice-training-table td:last-child { min-width: 120px; }
+.voice-training-table td small { display: block; margin-top: 5px; }
+#voice-training-progress { max-height: 260px; overflow: auto; }

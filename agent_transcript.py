@@ -163,3 +163,48 @@ def final_text(rows, *, combine=False):
             finals = [(step, text) for step, text in finals if step != step_index(row)]
             finals.append((step_index(row), str(row["content"]).strip()))
     return "\n\n".join(text for _, text in finals)
+
+
+def repeated_model_output(rows, minimum=4, *, long_idle=False):
+    """Detect only identical consecutive model outputs; any intervening step resets it."""
+    previous, count, silent_steps, standby_count = None, 0, 0, 0
+    standby = re.compile(r"(?:随时(?:等候|待命|准备|等待|听候)|等待(?:吩咐|指示|指令|下一步)|准备就绪|准备好(?:了|啦)|时刻(?:在线|待命|守候)|随时出发)")
+    loop_signature = re.compile(r"the user says\s*[\"']?continue[\"']?\s*again\s*\.\s*no tool calls needed\s*\.", re.I)
+    for row in rows:
+        # Some backends append the same continuation instruction inside one
+        # streaming planner row, surrounded by changing filler. Scope this to
+        # model output and require four occurrences, not a single quotation.
+        if (row.get("type") == "PLANNER_RESPONSE" and row.get("source") == "MODEL"
+                and not row.get("tool_calls") and (len(loop_signature.findall(str(row.get("content") or ""))) >= minimum
+                    or len(standby.findall(str(row.get("content") or ""))) >= minimum)):
+            previous, count = "__continuation_loop__", minimum
+            silent_steps += 1
+            continue
+        if (row.get("type") != "PLANNER_RESPONSE" or row.get("source") != "MODEL"
+                or row.get("tool_calls") or row.get("status") != "DONE"):
+            previous, count, silent_steps, standby_count = None, 0, 0, 0
+            continue
+        content = " ".join(str(row.get("content") or "").split())
+        if not content:
+            previous, count = None, 0
+            continue
+        silent_steps += 1
+        standby_count += len(standby.findall(content))
+        if standby_count >= minimum:
+            previous, count = "__standby_loop__", minimum
+            continue
+        count = count + 1 if content == previous else 1
+        previous = content
+    return count >= minimum or (long_idle and silent_steps >= 8)
+
+
+def has_pending_tool_calls(rows):
+    """Do not interrupt while any observed native tool lacks its receipt."""
+    pending = set()
+    for row in rows:
+        for call in row.get("tool_calls") or []:
+            if isinstance(call, dict):
+                pending.add(str(call.get("id") or "<unknown>"))
+        if row.get("type") in ("TOOL_RESULT", "TOOL_RESPONSE"):
+            pending.discard(str(row.get("tool_call_id") or ""))
+    return bool(pending)

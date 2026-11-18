@@ -204,18 +204,9 @@ class GeminiQQBot(MediaClientMixin, botpy.Client):
         """根据当前人设预设与配置动态刷新全局 System Prompt"""
         # 实时检测 config.yaml 变更（主人设置、专属称谓等热更新）
         try:
-            cfg_path = getattr(self, "config_path", "config.yaml")
-            if os.path.exists(cfg_path):
-                mtime = os.path.getmtime(cfg_path)
-                if not hasattr(self, "_config_mtime"):
-                    self._config_mtime = mtime
-                elif mtime > self._config_mtime:
-                    self._config_mtime = mtime
-                    from config import AppConfig
-                    fresh_cfg = AppConfig.load(cfg_path)
-                    self.app_config.bot = fresh_cfg.bot
-                    self.app_config.agent = fresh_cfg.agent
-                    logger.info("⚡ [QQBot] 检测到 config.yaml 变更，已热更新主人与群专属配置！")
+            from voice_live import reload_config
+            if reload_config(self, force=force_reload):
+                logger.info("[QQBot] 已应用保存的行为与语音配置，当前声音：%s", self.app_config.voice.character)
         except Exception as e:
             logger.debug(f"热重载配置异常: {e}")
 
@@ -464,7 +455,7 @@ class GeminiQQBot(MediaClientMixin, botpy.Client):
                     return
                 if media_context:
                     spoken = await self._send_decision_messages(initial_decision, media_context,
-                        self.personas.get_active_persona().name)
+                        persona_for(self, "", session_key).name)
                     if spoken:
                         self._remember_chat_reply(media_context, spoken)
 
@@ -1003,7 +994,7 @@ class GeminiQQBot(MediaClientMixin, botpy.Client):
         event = EventContext(scope, str(message.id or ""), time.time(), owner=scope + ":" + user,
                              text=clean_mention_text(message.content or ""))
         from persona_isolation import effective_persona
-        event.persona = effective_persona(self, "").model_copy(deep=True)
+        event.persona = effective_persona(self, "", key="c2c_" + user).model_copy(deep=True)
         self._observe_chat(scope, event.message_id, user, clean_mention_text(message.content or ""), event.received_at,
                            is_bot=getattr(message.author, "bot", False) is True)
         from media_router import is_work_request, parse_media_intent, is_priority_control

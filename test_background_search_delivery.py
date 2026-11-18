@@ -48,7 +48,7 @@ class BackgroundSearchDeliveryTests(unittest.IsolatedAsyncioTestCase):
             self.tmp.cleanup()
 
     def context(self, *, private=False, message_id="request"):
-        ctx = self.bot._make_media_context(session_key="onebot_group_123", user_id="456",
+        ctx = self.bot._make_media_context(session_key="onebot_private_123" if private else "onebot_group_123", user_id="456",
             conversation_id="123", message_id=message_id, text="查询最新消息", is_group=not private)
         ctx.send_text = AsyncMock()
         return SkillContext(ctx.ai_session_key, "123", "456", media_context=ctx,

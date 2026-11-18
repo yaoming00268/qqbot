@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>QQBot · Live2D</title>
+  <link rel="stylesheet" href="/assets/vtuber_overlay.css">
+</head>
+<body>
+  <canvas id="stage" aria-label="Live2D character"></canvas>
+  <div id="caption" role="status"></div>
+  <div id="capture-controls" hidden><button id="capture-audio">启用声音并隐藏控件</button><span>F2 显示 / 隐藏控件</span></div>
+  <aside id="preview" hidden>
+    <div class="eyebrow">QQBOT · LIVE STUDIO</div>
+    <h1>角色预览</h1>
+    <div id="connection">连接服务中</div>
+    <div id="model-name">加载 Live2D 模型</div>
+    <p id="notice">透明画布可直接添加到 OBS 浏览器源。示例角色为 Live2D 官方 Hiyori。</p>
+    <label>情绪 <select id="emotion"><option value="neutral">自然</option><option value="happy">开心</option><option value="sad">难过</option><option value="angry">生气</option><option value="surprised">惊讶</option><option value="shy">害羞</option><option value="thinking">思考</option><option value="excited">兴奋</option></select></label>
+    <div class="buttons"><button id="audio-enable">启用声音</button><button id="motion">播放动作</button><button id="reset">重置</button></div>
+    <label>预览字幕 <textarea id="caption-input" maxlength="4000" rows="2">你好，我已经准备好了。今天一起聊些什么？</textarea></label>
+    <div class="buttons"><button id="caption-send">显示字幕</button><button id="mouth-test">口型预览</button></div>
+    <p id="error" aria-live="polite"></p>
+    <footer>LOCAL PREVIEW · 不会触发开播或发送消息</footer>
+  </aside>
+  <script src="/assets/vtuber_assets/vendor/live2dcubismcore.min.js"></script>
+  <script src="/assets/vtuber_assets/vendor/pixi.min.js"></script>
+  <script src="/assets/vtuber_assets/vendor/pixi-live2d-display.min.js"></script>
+  <script src="/assets/vtuber_overlay.js"></script>
+</body>
+</html>

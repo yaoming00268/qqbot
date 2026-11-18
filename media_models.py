@@ -39,7 +39,7 @@ class MediaIntent(BaseModel):
 
 class MediaAsset(BaseModel):
     asset_id: str = Field(default_factory=lambda: uuid.uuid4().hex)
-    kind: Literal["image", "video", "file"]
+    kind: Literal["image", "video", "file", "voice"]
     title: str = ""
     url: str = ""
     source_url: str = ""

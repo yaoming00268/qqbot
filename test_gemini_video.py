@@ -136,7 +136,7 @@ class VideoGenerationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.action_type, "prepared")
         self.client.resolve_model.assert_called_once_with("pro")
         call = self.client.generate_content.await_args
-        self.assertIn("视频生成", call.args[0])
+        self.assertIn("把生成的视频文件发给我", call.args[0])
         self.assertEqual(call.kwargs["files"][0].read_bytes(), reference.read_bytes())
         asset, = result.data["files"]
         self.assertEqual((asset["kind"], asset["provider"], asset["mime"]), ("video", "gemini_web", "video/mp4"))

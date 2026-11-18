@@ -4,14 +4,78 @@ Configuration loader for QQ Bot + Antigravity Gemini Relay.
 """
 
 from __future__ import annotations
+from contextlib import contextmanager
+import hashlib
 import os
 from pathlib import Path
 import shutil
+import threading
+import time
 from typing import Optional, Dict, Literal
 import uuid
 from pydantic import BaseModel, Field, model_validator
 import yaml
 from agent_core.configuration import AgentConfig
+from voice_config import VoiceConfig, BroadcastVoiceConfig
+from vtuber_config import VTuberConfig
+from bilibili_config import BilibiliConfig
+from dsh_config import DSHConfig, ModelBackendConfig
+from conversation_routing import ConversationRoute, validate_routes
+
+
+_CONFIG_LOCKS = {}
+_CONFIG_LOCKS_GUARD = threading.Lock()
+_CONFIG_HELD = threading.local()
+
+
+def config_revision(path):
+    path = Path(path)
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else ""
+
+
+@contextmanager
+def config_lock(config_path):
+    """Serialize read/merge/write across threads and separate Studio/Core processes."""
+    path = Path(config_path).resolve()
+    key = os.path.normcase(str(path))
+    with _CONFIG_LOCKS_GUARD:
+        lock = _CONFIG_LOCKS.setdefault(key, threading.RLock())
+    with lock:
+        held = getattr(_CONFIG_HELD, "paths", set())
+        if key in held:
+            yield
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.with_name(path.name + ".lock").open("a+b") as stream:
+            stream.seek(0, os.SEEK_END)
+            if stream.tell() == 0:
+                stream.write(b"0")
+                stream.flush()
+            deadline = time.monotonic() + 10
+            while True:
+                try:
+                    stream.seek(0)
+                    if os.name == "nt":
+                        import msvcrt
+                        msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                    else:
+                        import fcntl
+                        fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("配置正在被其他进程保存，请稍后重试。") from None
+                    time.sleep(.025)
+            _CONFIG_HELD.paths = held | {key}
+            try:
+                yield
+            finally:
+                _CONFIG_HELD.paths = held
+                stream.seek(0)
+                if os.name == "nt":
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 
 
@@ -43,6 +107,14 @@ class WorkPermissions(BaseModel):
 
 
 class BotBehaviorConfig(BaseModel):
+    conversations: Dict[str, Dict[str, ConversationRoute]] = Field(default_factory=dict,
+        description="按账号配置群聊/私聊的人设，以及独立、合并或跟随主对话的共享方式")
+
+    @model_validator(mode="after")
+    def validate_conversations(self):
+        validate_routes(self.conversations)
+        return self
+
     bot_name: str = Field(default="", max_length=40, description="命令设置的机器人名称；留空沿用人设名称")
     reply_char_limit: int = Field(default=0, ge=0, le=100000, description="普通聊天一轮回复的总字数；0 不限制，完整命令结果和文件报告不截断")
     admin_ids: list[str] = Field(default_factory=list, description="管理员 QQ/OpenID；官方通道使用此列表确认管理员身份")
@@ -313,6 +385,8 @@ class OneBotConfig(BaseModel):
 
 
 class GeminiWebConfig(BaseModel):
+    transport: Literal["cookie", "browser"] = "cookie"
+    page_profile_dir: str = Field(default="data/gemini_web/page-profile", min_length=1, pattern=r".*\S.*", description="网页浏览器专用登录资料目录")
     model: str = Field(default="pro", max_length=200, description="网页端模型别名或账号返回的模型名称；auto 使用账号默认模型")
     auto_browser: bool = Field(default=True, description="自动复用已连接或当前浏览器的 Gemini 登录态")
     browser: Literal["auto", "chrome", "edge", "brave", "firefox"] = "auto"
@@ -451,6 +525,8 @@ class EmotionConfig(BaseModel):
 
 
 class AppConfig(BaseModel):
+    model_backend: ModelBackendConfig = Field(default_factory=ModelBackendConfig)
+    deepseek_harness: DSHConfig = Field(default_factory=DSHConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
     qq: QQConfig = Field(default_factory=QQConfig)
     antigravity: AntigravityConfig = Field(default_factory=AntigravityConfig)
@@ -460,13 +536,21 @@ class AppConfig(BaseModel):
     stickers: StickerConfig = Field(default_factory=StickerConfig)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     emotion: EmotionConfig = Field(default_factory=EmotionConfig)
+    voice: VoiceConfig = Field(default_factory=VoiceConfig)
+    broadcast_voice: BroadcastVoiceConfig = Field(default_factory=BroadcastVoiceConfig)
+    vtuber: VTuberConfig = Field(default_factory=VTuberConfig)
+    bilibili: BilibiliConfig = Field(default_factory=BilibiliConfig)
 
     @classmethod
-    def load(cls, config_path: str = "config.yaml") -> AppConfig:
+    def load(cls, config_path: str = "config.yaml", *, create=True) -> AppConfig:
         """从 yaml 配置文件加载配置，若文件不存在则创建默认模板。"""
         if not os.path.exists(config_path):
             default_config = cls()
-            default_config.save(config_path)
+            if create:
+                with config_lock(config_path):
+                    if os.path.exists(config_path):
+                        return cls.load(config_path, create=False)
+                    default_config.save(config_path)
             return default_config
 
         target_path = Path(config_path).resolve()
@@ -499,6 +583,28 @@ class AppConfig(BaseModel):
 
     def save(self, config_path: str = "config.yaml") -> None:
         """保存配置到 yaml 文件（原子写入，保证原有配置在序列化或磁盘错误时不被破坏）。"""
+        with config_lock(config_path):
+            self._save_file(config_path)
+
+    @classmethod
+    def update_fields(cls, config_path, changes, *, fallback=None, expected_revision=None):
+        """Apply explicit fields to the latest file, never a caller's stale snapshot."""
+        with config_lock(config_path):
+            if expected_revision is not None and config_revision(config_path) != expected_revision:
+                raise ValueError("配置已被其他窗口或机器人更新。请重新载入后再保存。")
+            current = cls.load(config_path, create=False) if Path(config_path).is_file() else (fallback or cls())
+            data = current.model_dump(mode="json")
+            if not isinstance(changes, dict) or not changes or set(changes) - set(data):
+                raise ValueError("没有有效配置分区。")
+            for name, fields in changes.items():
+                if not isinstance(fields, dict) or set(fields) - set(data[name]):
+                    raise ValueError(f"{name} 包含未知配置字段。")
+                data[name].update(fields)
+            updated = cls.model_validate(data)
+            updated.save(str(config_path))
+            return updated
+
+    def _save_file(self, config_path):
         # 保存前确保 active_account 与 ws_url 同步
         active = self.onebot.get_active_account()
         if active:

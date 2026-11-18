@@ -39,16 +39,19 @@ def identity(client, persona):
     return hashlib.sha256((namespace(client) + "\n" + pid).encode()).hexdigest()[:24]
 
 
-def effective_persona(client, group=""):
-    return (client.personas.get_persona(client.app_config.bot.get_persona_name(str(group)))
-            or client.personas.get_active_persona())
+def effective_persona(client, group="", *, key=""):
+    from conversation_routing import routed_persona, source_base
+    if key or group:
+        return routed_persona(client, key or source_base(client, group, True))
+    return client.personas.get_active_persona()
 
 
 def persona_for(client, group="", key=""):
     bound = _bound.get()
     if bound and bound[0] is client:
         if (MARKER in key and scoped_session(client, base_session(key), bound[2]) == key
-                or MARKER not in key and str(session_group(key) if key else group) == bound[1]):
+                or MARKER not in key and (not key or len(bound) < 4 or base_session(key) == bound[3])
+                and str(session_group(key) if key else group) == bound[1]):
             return bound[2]
     if MARKER in key:
         wanted = key.split(MARKER, 1)[1]
@@ -59,24 +62,25 @@ def persona_for(client, group="", key=""):
             if legacy_identity == wanted:
                 return preset
         raise ValueError("该会话所属人设已不存在，不能载入其他人设。")
-    return effective_persona(client, group)
+    return effective_persona(client, group, key=key)
 
 
 def scoped_session(client, key, persona=None):
     if MARKER in key:
         return key
-    return key + MARKER + identity(client, persona or persona_for(client, session_group(key)))
+    from conversation_routing import canonical_base
+    return canonical_base(client, key) + MARKER + identity(client, persona or persona_for(client, session_group(key), key))
 
 
 def session_is_active(client, key):
     return (MARKER in key and key == scoped_session(client, base_session(key),
-                                                   effective_persona(client, session_group(key))))
+                                                   effective_persona(client, session_group(key), key=base_session(key))))
 
 
 @contextmanager
 def persona_scope(client, group="", *, key="", persona=None):
     selected = persona or persona_for(client, group, key)
-    token = _bound.set((client, str(group), selected.model_copy(deep=True)))
+    token = _bound.set((client, str(group), selected.model_copy(deep=True), base_session(key)))
     try:
         yield selected
     finally:
@@ -96,6 +100,13 @@ def persona_bound(kind):
             group = (str(item) if kind == "proactive" else session_group(key) if key else
                      str(item.get("group_id", "")) if isinstance(item, dict) else
                      str(getattr(item, "group_openid", "")))
+            if kind != "core":
+                from conversation_routing import source_base
+                if kind == "private":
+                    peer = item.get("user_id", "") if isinstance(item, dict) else getattr(getattr(item, "author", None), "user_openid", "")
+                    key = source_base(client, peer, False) if peer else ""
+                elif group:
+                    key = source_base(client, group, True)
             from conversation_runtime import current_event
             event = current_event.get()
             preset = getattr(event, "persona", None) if event else None

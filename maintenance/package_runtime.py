@@ -78,9 +78,9 @@ exit /b 0
     files["prepare_home.cmd"] = prepare.replace("\n", "\r\n").encode("ascii")
     commands = {"run.bat": '"%~dp0QQBot.exe"', "run_gui.bat": '"%~dp0QQBotStudio.exe"',
                 "cli.bat": '"%~dp0QQBotCLI.exe"', "mcp.bat": '"%~dp0QQBotMCP.exe"',
-                "actor.bat": '"%~dp0QQBot.exe"'}
+                "actor.bat": '"%~dp0QQBot.exe"', "voice.bat": '"%~dp0QQBot.exe"'}
     for name, command in commands.items():
-        suffix = " --module actor" if name == "actor.bat" else ""
+        suffix = " --module actor" if name == "actor.bat" else " --module voice" if name == "voice.bat" else ""
         script = ('@echo off\nsetlocal DisableDelayedExpansion\ncall "%~dp0prepare_home.cmd"\n'
                   'if errorlevel 1 exit /b %errorlevel%\n'
                   + command + ' --home "%QQBOT_HOME%"' + suffix + ' %*\nexit /b %errorlevel%\n')

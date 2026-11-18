@@ -42,13 +42,13 @@ class MediaService:
         self.recovered = set()
         self.namespace = namespace
         self._delivery_locks = {}
-        # If a browser was linked before, headless starts keep receiving its
-        # updated login. Share a GUI listener instead of replacing its token.
-        from gemini_browser_link import resume_browser_link
-        try:
-            resume_browser_link(config.gemini_web)
-        except (OSError, ValueError):
-            logger.info("Gemini 浏览器连接未恢复，可在媒体页重新连接；其他媒体功能继续可用。")
+        if config.gemini_web.transport == "cookie":
+            # Keep receiving login updates from existing Cookie connections.
+            from gemini_browser_link import resume_browser_link
+            try:
+                resume_browser_link(config.gemini_web)
+            except (OSError, ValueError):
+                logger.info("Gemini 浏览器连接未恢复，可在媒体页重新连接；其他媒体功能继续可用。")
 
     def register_task_directory(self, job_id: str, directory: Path | str):
         path_str = str(Path(directory).resolve())

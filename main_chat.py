@@ -22,6 +22,7 @@ from runtime_paths import resource_path
 
 logger = logging.getLogger("MainChat")
 TOOLS_DIR = resource_path("console_tools")
+SELF_ACTIVITY_WAIT_LIMIT = 3
 
 MAIN_RULES = "\n\n".join((TOOLS_DIR / name).read_text(encoding="utf-8") for name in ("MAIN.md", "API.md"))
 
@@ -30,6 +31,10 @@ def compose_main_rules(system):
     return ("# QQBot 主会话总预设\n\n" + system + "\n\n" + MAIN_RULES +
         "\n通过常驻 qqbot_cli 调用：action 为命令名，operation 为可选子操作，params 为参数对象。"
         f"\n用法文档：{(TOOLS_DIR / 'README.md').as_posix()}")
+
+
+class LiveUnavailable(RuntimeError):
+    pass
 
 
 class MainChat:
@@ -44,6 +49,7 @@ class MainChat:
         from reply_queue import ReplyQueue
         self.replies = ReplyQueue()
         self.contexts = {}
+        self.contexts_by_scope = {}
         self.requests = {}
         self.request_contexts = {}
         self.worker = None
@@ -58,6 +64,14 @@ class MainChat:
         self.activity_review_tasks = {}
         self.activity_review_due = {}
         self.self_activity_tasks = {}
+        self.live_task = None
+        self.live_schedule_task = None
+        self.live_output_task = None
+        self.live_audio = None
+        self.live_idle_check_after = 0
+        self.live_heartbeat_after = 0
+        from live_events import recover as recover_live
+        recover_live(self.broker, self.namespace)
         self.self_activity_was_enabled = False
         self.activity_review_scan_lock = asyncio.Lock()
         self.identity_tasks = {}
@@ -224,6 +238,18 @@ class MainChat:
         session_key = self.client._chat_session_key(session_key)
         return self.root / hashlib.sha256((self.namespace + ":" + session_key).encode()).hexdigest()[:24]
 
+    def remember_context(self, key, ctx):
+        from conversation_routing import background_allowed
+        self.contexts_by_scope[(key, ctx.scope)] = ctx
+        previous = self.contexts.get(key)
+        if not previous or not previous.guard() or background_allowed(self.client, ctx):
+            self.contexts[key] = ctx
+
+    def context_for(self, key, scope=""):
+        ctx = self.contexts_by_scope.get((key, scope)) if scope else None
+        ctx = ctx or self.contexts.get(key)
+        return ctx if ctx and (not scope or ctx.scope == scope) else None
+
     def rules(self, session_key, system):
         directory = self.directory(session_key)
         directory.mkdir(parents=True, exist_ok=True)
@@ -251,7 +277,13 @@ class MainChat:
         output_dir = output_root / hashlib.sha256(ctx.message_id.encode()).hexdigest()[:24]
         output_dir.mkdir(parents=True, exist_ok=True)
         received_root = Path(service.config.cache_dir).resolve() / "received" / hashlib.sha256(ctx.scope.encode()).hexdigest()[:20]
+        from voice_service import voice_context
+        from voice_config import VoiceConfig
+        from voice_live import current_voice
+        voice_config = current_voice(client)
         payload = {"namespace": self.namespace, "scope": ctx.scope, "session_key": session_key,
+            "voice_config": voice_config.model_dump(), "voice": voice_context(voice_config),
+            "voice_config_path": str(Path(getattr(client, "config_path", "config.yaml")).resolve()),
             "transport": ctx.transport, "turn_managed": True, "reply_slots": max(0, 5 - ctx.sequence),
             "generation": session_generation(client.ai, session_key), "source_message_id": ctx.message_id,
             "sender_id": ctx.sender_id, "is_group": ctx.is_group, "conversation_id": ctx.conversation_id,
@@ -283,8 +315,14 @@ class MainChat:
         from agent_core.runtime import for_client
         from bot_identity import bind
         payload.update(bind(client, session_key))
+        from broadcast_commands import context_binding as broadcast_binding
+        if (getattr(getattr(client.app_config, "bilibili", None), "enabled", False)
+                or getattr(getattr(client.app_config, "vtuber", None), "enabled", False)):
+            payload.update(broadcast_binding(payload["voice_config_path"], is_master=payload["is_master"]))
         from exploration import configuration
-        payload["exploration_config"] = configuration(self, session_key)
+        payload["exploration_config"] = configuration(self, session_key, source=ctx)
+        from conversation_routing import source_binding
+        payload["conversation_binding"] = source_binding(client, ctx)
         self.identity.observe(payload["identity_owner"], ctx.scope, ctx.sender_id, sender_name or getattr(ctx, "sender_name", ""))
         runtime = for_client(client)
         if runtime:
@@ -297,7 +335,7 @@ class MainChat:
         self.requests[context_file] = ctx
         self.request_contexts[token] = ctx
         if not ctx.proactive_event:
-            self.contexts[session_key] = ctx
+            self.remember_context(session_key, ctx)
         while len(self.requests) > 512:
             self.requests.pop(next(iter(self.requests)))
         while len(self.request_contexts) > 512:
@@ -448,11 +486,24 @@ class MainChat:
 
     async def chat(self, session_key, prompt, *, ctx=None, system_prompt=None, memory_manifest=None, check_current=None,
                    idle_event=False, activity_scope="", activity_review=False, self_activity=False, agent_event=None,
-                   emotion_analysis=False, memory_maintenance=False, **options):
+                   emotion_analysis=False, memory_maintenance=False, live_event=None, **options):
         client = self.client
         session_key = session_key.removeprefix("__work__:")
         session = client.ai.get_or_create_session(session_key)
         generation = session.generation
+        if ctx:
+            from persona_isolation import base_session
+            from live_events import ROOT, reset_activity
+            if base_session(session_key) == ROOT: reset_activity(self.broker, self.namespace)
+        if live_event:
+            from live_events import ROOT, ROOM
+            from persona_isolation import base_session
+            if ctx or not idle_event or base_session(session_key) != ROOT:
+                raise PermissionError("无效直播主会话绑定。")
+            with self.broker.connect() as db:
+                row = db.execute("SELECT 1 FROM live_events WHERE id=? AND namespace=? AND root=? AND room=? AND state='running' AND generation=?",
+                    (live_event.get("event_id"), self.namespace, ROOT, ROOM, generation)).fetchone()
+            if not row: raise PermissionError("直播事件不属于当前主会话。")
         self.start()
         await self.interrupt_background(session_key, foreground=bool(ctx))
         async with self.replies.turn(session_key), self.locks.setdefault(session_key, asyncio.Lock()):
@@ -461,6 +512,9 @@ class MainChat:
             if ctx and ctx.proactive_event and self.broker.has_pending_speech(self.namespace, ctx.scope, session_key, generation):
                 return reply_json(plain_reply("", client.app_config.bot.max_reply_length))
             state = session.chat_state
+            from conversation_routing import shared_memory_manifest, source_binding, binding, source_turn_state, remember_turn_state
+            route = source_binding(client, ctx) if ctx else binding(client, session_key)
+            memory_manifest = shared_memory_manifest(self, session_key, memory_manifest) if client.app_config.bot.memory_enabled else memory_manifest
             from idle_memory import IdleMemory
             try:
                 reference = IdleMemory(self.directory(session_key), generation).reference()
@@ -479,6 +533,10 @@ class MainChat:
                                 for item in maintenance if item.get("path") and Path(item["path"]).is_file()]
                 memory_manifest = {**(memory_manifest or {}), "files": [*(memory_manifest or {}).get("files", []), *archive_refs]}
                 memory_manifest["fingerprint"] = hashlib.sha256(json.dumps(memory_manifest["files"], sort_keys=True).encode()).hexdigest()[:20]
+            if route["shared"] and memory_manifest:
+                memory_manifest["files"] = list({str(Path(item["path"]).resolve()).casefold(): item
+                                                 for item in memory_manifest.get("files", [])}.values())
+                memory_manifest["fingerprint"] = hashlib.sha256(json.dumps(memory_manifest["files"], sort_keys=True).encode()).hexdigest()[:20]
             system, persona_text, growth, behavior = self.system_for(session_key, components=True)
             path, rules, fingerprint = self.rules(session_key, system)
             protocol_hash = hashlib.sha256(MAIN_RULES.encode()).hexdigest()
@@ -487,9 +545,15 @@ class MainChat:
             persona_base_hash = hashlib.sha256(persona_text.encode()).hexdigest()
             behavior_hash = hashlib.sha256(json.dumps(behavior, sort_keys=True).encode()).hexdigest()
             parts = []
+            if ctx and route["shared"]:
+                parts.append(json.dumps({"conversation_source": {"scope": ctx.scope, "primary": route["primary"],
+                    "mode": route["mode"], "instruction": "本轮只向当前来源回复，权限以当前 CLI 上下文为准。"}}, ensure_ascii=False, separators=(",", ":")))
             context_token = ""
             feedback_signature = None
-            previous_failure = state.get("previous_turn_failure")
+            previous_failure = source_turn_state(state, "previous_turn_failure", ctx.scope,
+                shared=route["shared"]) if ctx else None
+            previous_delivery = (source_turn_state(state, "last_delivery", ctx.scope,
+                shared=route["shared"]) or {}) if ctx else {}
             if ctx and not ctx.proactive_event and previous_failure:
                 parts.append(json.dumps({"previous_turn_failure": previous_failure}, ensure_ascii=False))
             if not session.conversation_id:
@@ -512,7 +576,7 @@ class MainChat:
                         "preserve_identity_and_history": True}, ensure_ascii=False))
             if ctx:
                 if not ctx.proactive_event:
-                    self.contexts[session_key] = ctx
+                    self.remember_context(session_key, ctx)
                 from conversation_runtime import current_event
                 active = current_event.get()
                 # Individual follow-ups wait; a configured backlog can interrupt
@@ -535,6 +599,8 @@ class MainChat:
                         event.update(id=ctx.message_id, user_id=ctx.sender_id)
                         message_event = event
                         state["last_input"] = time.time()
+                        if not ctx.proactive_event:
+                            state["self_activity_wait_count"] = 0
                         prompt_lines[index] = json.dumps(event, ensure_ascii=False)
                         prompt = "\n".join(prompt_lines)
                         break
@@ -559,6 +625,10 @@ class MainChat:
                     pass
                 files = [item for item in self.broker.inbox(context_token) if item["source_message_id"] == ctx.message_id]
                 call_context = {"console_context_file": context_file, **quick_commands}
+                voice_capability = payload.get("voice", {"enabled": False})
+                if voice_capability.get("enabled") or state.get("voice_enabled"):
+                    call_context["voice"] = {key: value for key, value in voice_capability.items() if key != "instruction"}
+                state["voice_enabled"] = bool(voice_capability.get("enabled"))
                 if files:
                     call_context["received_files"] = files
                 if payload["reply_char_limit"]:
@@ -579,7 +649,7 @@ class MainChat:
                         "由你判断回答哪些问题、如何合并回应或等待。旧轮未发送内容已取消；"
                         "interrupted_replies 中 accepted 已发送，queued 等待投递，unknown/sending 结果不确定，均不要重复发送。"
                         "已提交的后台任务继续运行，先检查现有任务再决定是否安排新工作。")
-                delivery = state.get("last_delivery", {})
+                delivery = previous_delivery
                 if delivery.get("state") in ("unknown", "failed", "blocked", "queued"):
                     turn["previous_delivery"] = delivery
                 if turn["messages"] or turn["reply_style"] != "casual" or turn.get("previous_delivery"):
@@ -633,6 +703,9 @@ class MainChat:
                             work_permissions=cfg.bot.get_work_permissions(
                                 background.conversation_id if background.is_group else "").model_dump(),
                             sandbox_config={**cfg.sandbox.model_dump(), "directory": str(Path(cfg.sandbox.directory).resolve())})
+                    if live_event:
+                        metadata.update(live_event=True, event_id=live_event["event_id"], root=ROOT, room=ROOM,
+                            scope="live:" + ROOM, is_master=False, memory_files=[item["path"] for item in (memory_manifest or {}).get("files", [])])
                     if agent_event:
                         metadata = {**agent_event, "main_agent": True, "idle_event": True, "agent_event": True,
                             "self_activity": False, "proactive_event": False, "turn_managed": False,
@@ -641,7 +714,8 @@ class MainChat:
                             "output_dir": str(self.directory(session_key) / "agents")}
                     metadata.update(identity_binding, main_agent=True, generation=generation)
                     from exploration import configuration
-                    metadata["exploration_config"] = configuration(self, session_key)
+                    metadata["exploration_config"] = configuration(self, session_key,
+                        source=self.context_for(session_key, activity_scope))
                     if memory_maintenance:
                         metadata.update(memory_maintenance=True, turn_managed=True,
                             memory_files=[item["path"] for item in (memory_manifest or {}).get("files", [])])
@@ -656,7 +730,7 @@ class MainChat:
                     context_file = self.broker.issue_context(metadata, self.directory(session_key) / "contexts")
                     context_token = json.loads(Path(context_file).read_text(encoding="utf-8"))["token"]
                     parts.append(json.dumps({"console_context_file": context_file,
-                        "internal_event": "memory_maintenance" if memory_maintenance else "agent_messages" if agent_event else "self_activity" if self_activity else
+                        "internal_event": "live" if live_event else "memory_maintenance" if memory_maintenance else "agent_messages" if agent_event else "self_activity" if self_activity else
                                           "activity_observation" if activity_review else "idle"}, ensure_ascii=False))
             if ctx or memory_maintenance or self_activity or agent_event:
                 relevant_ids = list(dict.fromkeys([ctx.sender_id, *ctx.mentioned_user_ids,
@@ -722,8 +796,9 @@ class MainChat:
             rows = []
             if ctx and ctx.is_group:
                 rows = client.context_buffer.get_recent_messages(ctx.conversation_id, 50)
-                seen = (state.get("buffer_seen", []) if not bootstrap
-                        or state.get("last_delivery", {}).get("state") == "blocked" else [])
+                seen_buffer = state.get("buffer_seen_by_scope", {}).get(ctx.scope, []) if route["shared"] else state.get("buffer_seen", [])
+                seen = (seen_buffer if not bootstrap
+                        or previous_delivery.get("state") == "blocked" else [])
                 count = len(ctx.reply_sources) or 1
                 pending = [row for row in rows[:-count] if row.get("event_id") not in seen and not row["is_bot"]]
                 if pending:
@@ -734,11 +809,11 @@ class MainChat:
                 names = {str(row["author_openid"]): row["author_name"] for row in rows}
                 names[str(ctx.sender_id)] = message_event.get("sender") or getattr(ctx, "sender_name", "")
                 IdleMemory(self.directory(session_key), generation).append([
-                    *(pending if ctx.is_group else []),
-                    *({**row, "author_name": names.get(str(row.get("sender_id")), "")}
+                    *({**row, "source_scope": ctx.scope} for row in (pending if ctx.is_group else [])),
+                    *({**row, "author_name": names.get(str(row.get("sender_id")), ""), "source_scope": ctx.scope}
                       for row in batch if row.get("id") != ctx.message_id),
                     {**message_event, "timestamp": ctx.received_at,
-                             "reply_to": ctx.quoted_message_id}])
+                             "reply_to": ctx.quoted_message_id, "source_scope": ctx.scope}])
             # Rules are sent in the event once, including on an existing CID
             # restored from older bot versions. They are not resent every turn.
             # Legacy chat timeout settings must not terminate a robot turn.
@@ -759,6 +834,12 @@ class MainChat:
             try:
                 next_prompt = "\n\n".join(parts)
                 for continuation in range(4):
+                    if live_event:
+                        if not await self.live_available() or not generation_is_current(client.ai, session_key, generation):
+                            raise LiveUnavailable("直播关闭或主会话已改变。")
+                        with self.broker.connect() as db:
+                            still_running = db.execute("SELECT run FROM live_events WHERE id=? AND namespace=? AND state='running' AND generation=?", (live_event['event_id'], self.namespace, generation)).fetchone()
+                        if not still_running or not self.live_run_current(still_running["run"]): raise LiveUnavailable("直播事件已停止。")
                     response = await self._chat_with_delivery(session_key, next_prompt, ctx=ctx, system_prompt=rules,
                         memory_manifest=memory_manifest, natural_message=bool(ctx and message_event is not None), **options)
                     if not (ctx or idle_event):
@@ -793,18 +874,21 @@ class MainChat:
                         self.broker.seal_messages(context_token, cancel=True)
                     if (ctx and not ctx.proactive_event and isinstance(error, AgentServiceError)
                             and generation_is_current(client.ai, session_key, generation)):
-                        state["previous_turn_failure"] = {"source_message_id": ctx.message_id,
-                            "code": error.code, "reason": error.user_message}
-                        state["last_delivery"] = {"source_message_id": ctx.message_id,
-                            "state": "failed", "code": error.code}
+                        remember_turn_state(state, "previous_turn_failure", ctx.scope,
+                            {"source_message_id": ctx.message_id, "code": error.code, "reason": error.user_message})
+                        remember_turn_state(state, "last_delivery", ctx.scope,
+                            {"source_message_id": ctx.message_id, "state": "failed", "code": error.code})
                         client.ai._save_sessions()
                     if isinstance(error, ContentBlockedError) and generation_is_current(client.ai, session_key, generation):
                         # Consume this input batch so the next message does not
                         # automatically resubmit it as unseen_messages.
                         state.update(last_event=time.time(), last_should_reply=False,
-                            buffer_seen=[row.get("event_id") for row in rows],
-                            last_delivery={"source_message_id": ctx.message_id if ctx else "",
-                                "state": "blocked", "code": ContentBlockedError.code})
+                            buffer_seen=[row.get("event_id") for row in rows])
+                        remember_turn_state(state, "last_delivery", ctx.scope if ctx else activity_scope,
+                            {"source_message_id": ctx.message_id if ctx else "",
+                             "state": "blocked", "code": ContentBlockedError.code})
+                        if ctx and ctx.is_group and route["shared"]:
+                            state.setdefault("buffer_seen_by_scope", {})[ctx.scope] = state["buffer_seen"]
                         client.ai._save_sessions()
                     raise
             finally:
@@ -838,8 +922,16 @@ class MainChat:
             decision = plain_reply("", client.app_config.bot.max_reply_length)
             if activity_review:
                 decision = plain_reply("", client.app_config.bot.max_reply_length)
-            if idle_event and self.broker.reply_control(context_token).get("mode") == "wait":
+            idle_wait = idle_event and self.broker.reply_control(context_token).get("mode") == "wait"
+            if idle_wait:
                 decision = plain_reply("", client.app_config.bot.max_reply_length)
+            if idle_event and self_activity:
+                state["self_activity_wait_count"] = (
+                    min(SELF_ACTIVITY_WAIT_LIMIT, state.get("self_activity_wait_count", 0) + 1)
+                    if idle_wait else 0)
+                if state["self_activity_wait_count"] == SELF_ACTIVITY_WAIT_LIMIT:
+                    logger.info("[%s] 连续 %d 次 wait，暂停空闲自由活动提醒，等待新聊天消息。",
+                                session_key, SELF_ACTIVITY_WAIT_LIMIT)
             if ctx:
                 control = self.broker.reply_control(context_token)
                 superseded = ctx.is_group and ctx.reply_supersedable and client._chat_turns.superseded(ctx.scope, ctx.message_id, ctx.sender_id)
@@ -854,8 +946,9 @@ class MainChat:
                     decision.should_reply, decision.reply_text, decision.messages = False, "", []
                     decision.reason = "同一发言人已有补充，等待合并后的消息" if superseded else "等待对方说完或下一条消息"
                 if not ctx.cli_streamed or ctx.cli_messages:
-                    state["last_delivery"] = {"source_message_id": ctx.message_id,
-                        "state": "suppressed" if not decision.should_reply else "prepared", "reason": decision.reason}
+                    remember_turn_state(state, "last_delivery", ctx.scope,
+                        {"source_message_id": ctx.message_id,
+                         "state": "suppressed" if not decision.should_reply else "prepared", "reason": decision.reason})
                 logger.info("[%s] 来源 %s: %s，agent 等待 %.2f 秒%s", session_key, ctx.message_id,
                     "正文准备发送" if decision.should_reply else "本轮不发送", time.monotonic() - started,
                     "；" + decision.reason if decision.reason else "")
@@ -870,8 +963,12 @@ class MainChat:
                 state["memory_index_hash"] = memory_index_hash
             if ctx and ctx.is_group:
                 state["buffer_seen"] = [row.get("event_id") for row in rows]
-            if ctx and not ctx.proactive_event and previous_failure == state.get("previous_turn_failure"):
-                state.pop("previous_turn_failure", None)
+                if route["shared"]:
+                    state.setdefault("buffer_seen_by_scope", {})[ctx.scope] = state["buffer_seen"]
+            if ctx and not ctx.proactive_event and previous_failure:
+                state.get("previous_turn_failure_by_scope", {}).pop(ctx.scope, None)
+                if previous_failure == state.get("previous_turn_failure"):
+                    state.pop("previous_turn_failure", None)
             if feedback_signature is not None:
                 state["activity_feedback_seen"] = feedback_signature
             client.ai._save_sessions()
@@ -935,7 +1032,7 @@ class MainChat:
             ctx = self.request_contexts.get(request["token"])
             if ctx is None and context.get("self_directed"):
                 from dataclasses import replace
-                source = self.contexts.get(context["session_key"])
+                source = self.context_for(context["session_key"], context["scope"])
                 if source:
                     ctx = replace(source, sender_id=context["sender_id"], message_id="",
                                   text=request["task"], proactive_event=False, reply_supersedable=False)
@@ -1008,7 +1105,7 @@ class MainChat:
             else:
                 # A fresh official message renews the platform window. Keep its
                 # shared sequence allocator instead of copying/resetting it.
-                ctx = self.contexts.get(metadata["session_key"])
+                ctx = self.context_for(metadata["session_key"], metadata["scope"])
             if ctx is not None and ctx.guard():
                 try:
                     ctx.check_reply_available()
@@ -1048,6 +1145,9 @@ class MainChat:
                            "request_id": request["id"], "source_message_id": ctx.message_id}
                 self._persist_result(request, metadata, payload, state="completed")
                 return SkillResult(True, "文件已接收。", data=payload, reply_handled=True)
+            elif request["kind"] == "singing":
+                from singing_commands import execute_singing
+                result = await execute_singing(self, request, ctx, metadata, compatibility, skill_context)
             elif request["kind"] == "send_files":
                 result = await RunTaskSkill().deliver_files(compatibility["files"], skill_context,
                                                            roots=metadata["artifact_roots"])
@@ -1068,14 +1168,15 @@ class MainChat:
                 answer = execute_control(self, request, ctx, metadata) if request["kind"] == "bot_command" else compatibility["error"]
                 # Reset/model/persona controls may change the receiving main
                 # conversation. Bind their result to its new valid generation.
-                from persona_isolation import base_session, effective_persona, scoped_session
-                key = scoped_session(self.client, base_session(metadata["session_key"]),
-                    effective_persona(self.client, ctx.conversation_id if ctx.is_group else ""))
+                from persona_isolation import effective_persona, scoped_session
+                from conversation_routing import source_base
+                source_key = source_base(self.client, ctx.conversation_id, ctx.is_group)
+                key = scoped_session(self.client, source_key, effective_persona(self.client, key=source_key))
                 ctx = self.client._make_media_context(session_key=key, user_id=ctx.sender_id,
                     conversation_id=ctx.conversation_id, message_id=ctx.message_id, text=ctx.text,
                     is_group=ctx.is_group, received_at=ctx.received_at, reply=ctx.send_text)
                 metadata = {**metadata, "session_key": key, "generation": session_generation(self.client.ai, key)}
-                self.contexts[key] = ctx
+                self.remember_context(key, ctx)
                 with self.broker.connect() as db:
                     db.execute("UPDATE contexts SET payload=? WHERE token=?", (json.dumps(metadata, ensure_ascii=False), request["token"]))
                 result = SkillResult(request["kind"] != "command_error", answer,
@@ -1289,6 +1390,10 @@ class MainChat:
                 await self.schedule_learning()
                 await self.schedule_activity_reviews()
                 await self.schedule_self_activity()
+                self.publish_live_heartbeat()
+                if self.live_schedule_task is None or self.live_schedule_task.done():
+                    self.live_schedule_task = asyncio.create_task(self.schedule_live_events())
+                await self.schedule_live_output()
                 await self.schedule_identity_maintenance()
                 await self.recall_idle()
                 if hasattr(self.client, "sync_system_prompt"):
@@ -1297,11 +1402,122 @@ class MainChat:
                 runtime = for_client(self.client)
                 if runtime:
                     await runtime.tick()
+                from broadcast_commands import tick_client
+                await tick_client(self.client)
             except asyncio.CancelledError:
                 raise
             except Exception:
                 logger.exception("控制台后台调度暂不可用，下轮重试")
             await asyncio.sleep(0.5)
+
+    def publish_live_heartbeat(self):
+        if not hasattr(self.client, "send_action") or time.monotonic() < self.live_heartbeat_after:
+            return
+        import psutil
+        from osu_telemetry_worker import publish_latest
+        self.live_heartbeat_after = time.monotonic() + 3
+        directory = self.root.parent / "osu-live"
+        directory.mkdir(parents=True, exist_ok=True)
+        name = hashlib.sha256(self.namespace.encode()).hexdigest()[:16] + ".json"
+        publish_latest(directory / name, {"namespace":self.namespace,"database":str(self.broker.path),
+            "pid":os.getpid(),"created":psutil.Process().create_time(),"heartbeat":time.time()})
+
+    def live_run_current(self, run):
+        try:
+            control=json.loads((self.root.parent / "osu-live" / "control.json").read_text(encoding="utf8"))
+            return control.get("enabled") is True and control.get("stop") is not True and (run == "idle" or control.get("run") == run)
+        except (OSError, ValueError, TypeError):
+            return False
+
+    async def live_available(self):
+        """Require a fresh room response and explicit local live enablement."""
+        try:
+            control = json.loads((self.root.parent / "osu-live" / "control.json").read_text(encoding="utf8"))
+            if control.get("enabled") is not True or control.get("stop") is True or not self.client.app_config.bilibili.enabled:
+                return False
+            from bilibili_adapter import BilibiliAdapter
+            from live_events import ROOM
+            info = await asyncio.wait_for(BilibiliAdapter(self.client.app_config.bilibili.credentials_file).room_info(int(ROOM)), timeout=5)
+            is_live = info.get("live_status") == 1
+            from osu_telemetry_worker import publish_latest
+            publish_latest(self.root.parent / "osu-live" / "room-status.json", {"state":"live" if is_live else "closed", "checked_at":time.time()})
+            return is_live
+        except (OSError, ValueError, TypeError, asyncio.TimeoutError):
+            return False
+        except Exception:
+            logger.warning("直播状态不可确认，保持静默。")
+            return False
+
+    async def schedule_live_events(self):
+        if self.live_task and not self.live_task.done():
+            return
+        from live_events import ROOT, claim
+        if not hasattr(self.client, "send_action"):
+            return
+        with self.broker.connect() as db:
+            pending = db.execute("SELECT 1 FROM live_events WHERE namespace=? AND state='queued' LIMIT 1", (self.namespace,)).fetchone()
+        if not pending:
+            control = self.root.parent / "osu-live" / "control.json"
+            if not control.exists() or time.monotonic() < self.live_idle_check_after: return
+            self.live_idle_check_after = time.monotonic() + 30
+            if not await self.live_available(): return
+            from live_events import enqueue_idle
+            if not enqueue_idle(self.broker, self.namespace): return
+        elif not await self.live_available():
+            from live_events import cancel_pending
+            cancel_pending(self.broker, self.namespace)
+            return
+        key = self.client._chat_session_key(ROOT)
+        generation = session_generation(self.client.ai, key)
+        event = claim(self.broker, self.namespace, generation)
+        if not event:
+            return
+        async def process():
+            outcome = "unknown"
+            try:
+                if not await self.live_available() or not self.live_run_current(event["run"]) or not generation_is_current(self.client.ai, key, generation):
+                    outcome = "cancelled"
+                    return
+                prompt = json.dumps({"type":"live_map_analysis" if event["kind"] == "analysis" else "live_idle", "summary":json.loads(event["summary"]),
+                    "instruction":"依据事实用自己的身份简短分析；闲时可依据自己的兴趣自然闲聊或静默。仅用 live-say 提交直播台词，或 wait 静默；最后 finish。禁止向 QQ 发送。"}, ensure_ascii=False)
+                await self.client._main_chat(key, prompt, idle_event=True, activity_scope="live:"+event["room"], live_event={"event_id":event["id"]})
+                outcome = "done"
+                if event["kind"] == "idle":
+                    from live_events import record_idle_result
+                    record_idle_result(self.broker, self.namespace, event["id"])
+            except asyncio.CancelledError:
+                raise
+            except LiveUnavailable:
+                outcome = "cancelled"
+            except Exception:
+                logger.exception("直播主对话事件未确认完成，保留为 unknown。")
+            finally:
+                with self.broker.connect() as db:
+                    db.execute("UPDATE live_events SET state=? WHERE id=? AND state='running'", (outcome,event["id"]))
+                    if outcome != "done":
+                        db.execute("UPDATE live_outgoing SET state='cancelled' WHERE event_id=? AND state='queued'", (event["id"],))
+        self.live_task = asyncio.create_task(process())
+
+    async def schedule_live_output(self):
+        if self.live_output_task and not self.live_output_task.done():
+            return
+        with self.broker.connect() as db:
+            pending = db.execute("SELECT 1 FROM live_outgoing o JOIN live_events e ON e.id=o.event_id WHERE e.namespace=? AND o.state='queued' LIMIT 1", (self.namespace,)).fetchone()
+        if not pending:
+            return
+        from live_events import ROOT, ROOM
+        from live_playback import OwnedAudio, drain_one
+        def current(row):
+            return (row['root'] == ROOT and row['room'] == ROOM and self.live_run_current(row['run']) and generation_is_current(
+                self.client.ai, self.client._chat_session_key(ROOT), row['generation']))
+        async def render(row):
+            if self.live_audio is None:
+                from runtime_paths import application_home
+                self.live_audio = OwnedAudio(application_home(), self.client.app_config.broadcast_voice, self.broker.path)
+            return await self.live_audio.render(row)
+        async def play(row,path):
+            return await self.live_audio.play(row,path)
+        self.live_output_task = asyncio.create_task(drain_one(self.broker,self.namespace,self.live_available,current,render,play))
 
     @staticmethod
     def activity_signature(feedback):
@@ -1414,6 +1630,9 @@ class MainChat:
         now = time.time()
         for key, ctx in list(self.contexts.items()):
             task = self.self_activity_tasks.get(key)
+            from conversation_routing import background_allowed
+            if not background_allowed(self.client, ctx):
+                continue
             if (not ctx.guard() or not session_is_active(self.client, key)
                     or task and not task.done() or self.locks.get(key, asyncio.Lock()).locked()):
                 continue
@@ -1421,6 +1640,8 @@ class MainChat:
             if runtime.closed or ctx.scope in runtime.chat_workers or runtime.inboxes.get(ctx.scope):
                 continue
             state = self.client.ai.get_or_create_session(key).chat_state
+            if state.get("self_activity_wait_count", 0) >= SELF_ACTIVITY_WAIT_LIMIT:
+                continue
             last_input = state.get("last_input", state.get("last_event", ctx.received_at or now))
             if now - max(last_input, state.get("last_self_attempt", 0)) < cfg.self_activity_interval_minutes * 60:
                 continue
@@ -1434,6 +1655,9 @@ class MainChat:
                     if generation_is_current(self.client.ai, session_key, expected):
                         await self.chat(session_key, json.dumps({"type": "self_activity"}, ensure_ascii=False),
                             activity_scope=scope, self_activity=True, idle_event=True)
+                        state = self.client.ai.get_or_create_session(session_key).chat_state
+                        if state.get("self_activity_wait_count", 0) >= SELF_ACTIVITY_WAIT_LIMIT:
+                            return
                         # A quiet finish must not turn every personal interval
                         # into another wait. Continue one evidence-backed goal.
                         from exploration import ensure_exploration
@@ -1587,10 +1811,19 @@ class MainChat:
         if self.worker:
             self.worker.cancel()
             await asyncio.gather(self.worker, return_exceptions=True)
+        for task in (self.live_task, self.live_schedule_task, self.live_output_task):
+            if task and not task.done(): task.cancel()
+        await asyncio.gather(*(task for task in (self.live_task, self.live_schedule_task, self.live_output_task) if task), return_exceptions=True)
+        if self.live_audio: await self.live_audio.close()
         await self.agents.close()
         runtime = getattr(self.client, "_actor_runtime", None)
         if runtime:
             await runtime.close()
+        from broadcast_host import stop_server as stop_broadcast
+        from vtuber_host import stop_server as stop_avatar
+        stop_broadcast(str(Path(getattr(self.client, "config_path", "config.yaml")).resolve()))
+        if getattr(self.client.app_config, "vtuber", None) is not None:
+            stop_avatar(self.client.app_config.vtuber)
         tasks = [*self.recall_tasks.values(), *self.startup_tasks.values(), *self.delivery_tasks.values(),
                  *self.activity_review_tasks.values(), *self.self_activity_tasks.values(), *self.identity_tasks.values()]
         for task in tasks:

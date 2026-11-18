@@ -47,6 +47,8 @@ class ConsoleBroker(OutgoingCommands, SpeechCommands):
                     sender_id TEXT, source_message_id TEXT, kind TEXT, text TEXT, created REAL,
                     UNIQUE(namespace,scope,source_message_id,kind));
             """)
+            from live_events import initialize as initialize_live_events
+            initialize_live_events(db)
             from agent_mailbox import initialize
             initialize(db)
             from console_tools.speech import initialize as initialize_speech
@@ -72,7 +74,7 @@ class ConsoleBroker(OutgoingCommands, SpeechCommands):
             payload = self._bind_speech(db, payload)
             db.execute("INSERT INTO contexts VALUES(?,?,?,?,?)", (token, payload["namespace"],
                 payload["scope"], json.dumps(payload, ensure_ascii=False),
-                None if payload.get("sandbox_session_id") or payload.get("agent_worker_id") else time.time() + 86400))
+                None if payload.get("sandbox_session_id") or payload.get("agent_worker_id") else time.time() + (300 if payload.get("live_event") else 86400)))
             for message in payload.get("reply_sources", []):
                 if message.get("id"):
                     db.execute("INSERT OR IGNORE INTO chat_messages VALUES(?,?,?,?,?,?)", (
@@ -99,7 +101,8 @@ class ConsoleBroker(OutgoingCommands, SpeechCommands):
             row = db.execute("SELECT payload,expires FROM contexts WHERE token=?", (token,)).fetchone()
         if not row or (not allow_expired and row["expires"] is not None and row["expires"] <= time.time()):
             raise ConsoleFileError("CONTEXT_EXPIRED", "调用上下文已过期或失效。", "使用当前消息的 console_context_file；不要修改凭据或重放未知操作。")
-        return json.loads(row["payload"])
+        from voice_live import refresh_binding
+        return refresh_binding(json.loads(row["payload"]))
 
     def submit(self, token, kind, task, request_key="", *, provider="", model=""):
         context = self.context(token)
@@ -141,7 +144,15 @@ class ConsoleBroker(OutgoingCommands, SpeechCommands):
 
     def read_memory(self, token, path, *, view="summary", query="", offset=0, max_chars=4000):
         """Only controller-listed memory files are readable by the main agent."""
-        context = self._chat_context(token, allow_committed=True)
+        context = self.context(token)
+        if context.get("live_event"):
+            with self.connect() as db:
+                self._require_active_turn(db, token)
+                row = db.execute("SELECT 1 FROM live_events WHERE id=? AND namespace=? AND root=? AND room=? AND generation=? AND state='running'",
+                    (context.get("event_id"), context.get("namespace"), context.get("root"), str(context.get("room")), context.get("generation"))).fetchone()
+                if not row: raise PermissionError("直播上下文已失效。")
+        else:
+            context = self._chat_context(token, allow_committed=True)
         target = Path(path).resolve()
         allowed = {str(Path(value).resolve()) for value in context.get("memory_files", [])}
         if str(target) not in allowed:

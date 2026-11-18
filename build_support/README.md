@@ -1,5 +1,11 @@
 # QQBot 多模块运行包
 
+2026-11-16 声音训练版新增标注语料导入、自动切分转写、GPT-SoVITS 角色微调、留出集验证与注册。语音角色切换立即保存并显示 Bot 应用回执。使用步骤见 `_internal/VOICE_TRAINING_README.md`；`voice.bat train status` 可查询训练数据与任务。角色语料、训练权重和独立 GPU 环境留在数据目录，不包含在干净运行包中。
+
+2026-11-14 版包含 GPT-SoVITS 语音工作室、日语假名词典、腾讯 SILK 编码器与官方 DeepSeek Harness SDK 运行时。语音语言和情绪切片在控制台选择，主代理按语境通过 CLI 选择文字或 QQ 语音。独立引擎/ATRI 模型安装、试听、混语和 DSH 配置见 `_internal/VOICE_README.md`（源码见根目录同名文件）。DSH 默认不切换；启用时需配置自己的模型凭据。
+
+`QQBot.exe --home <数据目录> --module voice status` 查询本地配置；`prepare --text "一緒に本を読む。"` 检查分词；`setup --python C:\Python312\python.exe --device cuda` 准备独立推理环境。便携 ZIP 另带 `voice.bat` 入口。GPU 环境和角色权重放在数据目录外部工具区，未混入 Bot 主程序；全新包默认关闭语音。
+
 `QQBot.exe`（核心）、`QQBotStudio.exe`（GUI）、`QQBotCLI.exe`（命令行）、`QQBotMCP.exe`（stdio 服务）分别内置预编译 Python 模块，共享 `_internal` 中的 Python 运行时和 DLL。整体复制运行目录，不要拆开移动 EXE，也不要删除 `_internal`。适用于具有系统 ICU 的 Windows 10/11 x64；Studio 需要 Microsoft Edge WebView2 Runtime。不采用单文件临时解压，不在启动时编译项目源码；仍需正常导入模块，模型和网络等待时间不由封装消除。
 
 现有项目直接双击根目录 `run_gui.bat` 或 `run.bat`，优先使用编译运行包，并通过 `--home` 复用原账号配置、人设、记忆、缓存和已安装的 NapCat/QEMU。设置环境变量 `QQBOT_USE_SOURCE=1` 可回到源码入口。不要同时启动两个操作同一账号的核心服务。

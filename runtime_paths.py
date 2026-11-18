@@ -21,6 +21,13 @@ def resource_path(relative: str) -> Path:
 
 
 def module_command(module: str) -> list[str]:
+    if module in {"osu-spectator", "osu-telemetry-worker", "osu-telemetry-mcp", "osu-resident", "osu-resident-audio", "live-audio-sink", "osu-live"}:
+        scripts = {"osu-spectator": "osu_spectator.py", "osu-telemetry-worker": "osu_telemetry_worker.py", "osu-telemetry-mcp": "osu_telemetry_mcp.py", "osu-resident": "osu_resident.py", "osu-resident-audio": "osu_resident_audio.py", "live-audio-sink": "live_audio_sink.py", "osu-live": "osu_live.py"}
+        return [*module_command("core"), "--module", module] if getattr(sys, "frozen", False) else [sys.executable, "-X", "utf8", str(resource_path(scripts[module]))]
+    if module == "bilibili-browser":
+        return [*module_command("core"), "--module", module] if getattr(sys, "frozen", False) else [sys.executable, "-X", "utf8", str(resource_path("bilibili_browser.py"))]
+    if module == "voice":
+        return [*module_command("core"), "--module", "voice"] if getattr(sys, "frozen", False) else [sys.executable, "-X", "utf8", str(resource_path("voice_cli.py"))]
     if module == "media":
         return [*module_command("core"), "--module", "media"] if getattr(sys, "frozen", False) else [sys.executable, "-X", "utf8", str(resource_path("media_worker.py"))]
     if module == "actor":
