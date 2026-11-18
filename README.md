@@ -336,7 +336,7 @@ python main.py
 | `/persona` 或 `人设` | 查看所有可用的人设预设列表与当前生效人设 |
 | `/persona <名称>` | 主人账号切换全局人设；主人身份由 `bot.master_id` 配置，GUI 也可切换 |
 | `/model` | 查询当前会话所用的 Gemini 模型 |
-| `/model pro` | 切换至 **Gemini 3.8 Pro**（适合深度推理、长代码与复杂问题） |
+| `/model pro` | 切换至 **Gemini 3.8 **（适合深度推理、长代码与复杂问题） |
 | `/model flash` | 切换至 **Gemini 3.8 Flash**（默认推荐，兼具智能与高响应速度） |
 | `/model flash_lite` | 切换至 **Flash-Lite** 极速模型 |
 | `/memory` 或 `群记忆` | 查看当前 QQ 群的记忆库概括摘要与活跃常客记录 |
